@@ -56,8 +56,7 @@ ASK_USER = "ASK USER"
 
 def _load_project_facts():
     here = Path(__file__).resolve().parent / "project_facts.py"
-    util = Path(os.path.expanduser("~/utilities/firmware/project_facts.py"))
-    for cand in (here, util):
+    for cand in (here,):
         if cand.is_file():
             sys.path.insert(0, str(cand.parent))
             import project_facts  # noqa: E402
@@ -67,9 +66,8 @@ def _load_project_facts():
 
 def _load_platforms():
     here = Path(__file__).resolve().parent / "platforms.py"
-    util = Path(os.path.expanduser("~/utilities/firmware/platforms.py"))
     # Prefer the local copy (the front end's own platform table); fall back to the shared one.
-    for cand in (here, util):
+    for cand in (here,):
         if cand.is_file():
             sys.path.insert(0, str(cand.parent))
             import platforms  # noqa: E402

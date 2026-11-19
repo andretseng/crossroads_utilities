@@ -23,7 +23,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-sys.path.insert(0, "/home/andre/utilities/firmware")
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # own folder only
 import project_facts  # noqa: E402  (imported for build selection / staleness / FOREIGN)
 
 ASK_USER = "ASK USER"
