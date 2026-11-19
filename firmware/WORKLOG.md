@@ -23,3 +23,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPO
 - 14:02 c_facts spec+tests ready (io.c sendbuf/recvbuf: else-if parent, ?: values 0x10/0x08, assignment paths, !n++).
 - 14:02 item 7 done: flow proposals P1-P10 in vault note §8c (not implemented). Vault note committed (not pushed).
 - 14:03 config_calls spec+tests ready (io.c 159/162/180 values, 151 path, config.c:21 call).
+- 14:04 reg_decode (T3) spec+tests ready (CCCTL_01 139264 -> COC CAPTURE, ZCOND CC_TRIG_FALL; C2000 TBCTL 0x40B m_s).
