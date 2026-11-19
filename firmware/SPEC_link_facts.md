@@ -39,3 +39,16 @@ link_facts.py PROJECT_DIR --build NAME overlaps         # overlapping sections /
 - Standard library only; no chip/case names in the script. Read-only everywhere except /tmp. Code in /tmp first, then ask to copy.
 - No commit. Report `~/utilities/firmware/REPORT_link_facts_20261119.md`: projects checked (AM13, C2000, MSPM0, AM261, AM275x sbl
   if built), what was right/wrong, open points. Disassembly of `.out` is a later step — not in this task.
+
+## Addendum (2026-11-19): implementer = Pi (Ornith); the acceptance tests are written by Claude
+`test_link_facts.py` is given and must pass unchanged. Do not edit it. JSON contract (`--json`, integers as numbers, not strings):
+- Project mode: `link_facts.py PROJECT_DIR --build NAME <command>`; explicit mode for fixtures: `link_facts.py --xml FILE [--map FILE] --unit byte|word16 <command>`.
+- `summary` -> `{"source": "xml"|"map", "xml": path|null, "map": path|null, "ignored": [paths of other .map/_linkInfo.xml in the build folder],
+  "unit": "byte"|"word16", "entry": {"name": str, "address": int}, "regions": [{"name", "page", "origin", "length", "used", "unused"}]}`
+- `symbol NAME...` -> `{"symbols": [{"name", "found": bool, "address": int|null, "section": str|null, "section_address": int|null,
+  "section_size": int|null, "input_file": str|null, "note": str}]}` — section = the object component whose run range [run, run+size)
+  contains the address; input_file = that component's input file name. Not found -> found false and note
+  "not in symbol table: may be inlined or removed".
+- `overlaps` -> `{"overlaps": [{"a": name, "b": name, "start": int, "end": int}], "over_full": [region names]}` — overlaps between
+  object components' run ranges inside the same page, and regions whose used > length.
+- unit: word16 when the build's compiler family is cl2000 (C28x), else byte. Exit 3 + ASK USER as in project_facts.
