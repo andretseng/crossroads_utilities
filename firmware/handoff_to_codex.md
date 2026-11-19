@@ -19,7 +19,7 @@ User's instruction (2026-11-19): "when you reach 95% weekly limit, write handoff
 
 ## Pointers
 - Queue and log: `~/utilities/firmware/worklog.md` (read first; append one line per step).
-- Specs + acceptance tests (committed, all expected values measured with the real compilers): `~/utilities/firmware/SPEC_{preprocess,c_eval,c_facts,config_calls,reg_decode,asm_view,link_facts}.md` + `test_*.py`; `~/utilities/notes/spec_notes.md` + `test_notes.py`.
+- Specs + acceptance tests (committed, all expected values measured with the real compilers): `~/utilities/firmware/spec_{preprocess,c_eval,c_facts,config_calls,reg_decode,asm_view,link_facts}.md` + `test_*.py`; `~/utilities/notes/spec_notes.md` + `test_notes.py`.
 - Pi lane order: link_facts part 2 (`/tmp/link_cmd_pi`, RUNNING at handoff, 5 of test_link_cmd failing) -> preprocess -> asm_view -> notes -> reg_decode -> config_calls. Codex lane (T5, AST-heavy): c_eval then c_facts (needs `backends.evaluate`). reg_decode and config_calls depend on c_eval/c_facts.
 - For each next Pi task: `mkdir /tmp/<tool>_pi`, copy the SPEC, tests and current `project_facts.py sdk_inventory.py platforms.py backends/` into it, set `/tmp/pi_current`, send Pi one prompt (pattern: "read SPEC, make tests pass, do not edit tests, work only in /tmp/<tool>_pi, write report.md, stop after 2 failed attempts on the same test").
 - Commits: latest `acb2e56` (worklog). Vault note commits are local only (not pushed).
