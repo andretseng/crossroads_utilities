@@ -49,3 +49,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/repo
 20:36 reg_decode dispatched to Pi in /tmp/reg_decode_pi; waiting exclusively on its finish event (no polling).
 20:52 reg_decode accepted: Pi gate 3 tests + merge OK; independent F28P65x cl2000 macro comparison, unknown-register exit 2, and 705-file snapshot passed.
 21:05 config_calls dispatched to Pi in /tmp/config_calls_pi; waiting exclusively on finish event.
+21:40 config_calls fixed and accepted: 8 tests + merge OK; AM261 real-project checks, TI legacy exit 2, missing source error, and project snapshot passed; promoted.
