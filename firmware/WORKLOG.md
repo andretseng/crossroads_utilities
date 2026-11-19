@@ -14,3 +14,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPO
 7. flow proposals (vault only)
 
 ## Log
+- 13:53 item 1a: struct_layout + compile_command merged (6 rounds). Unseen checks: DL_TimerG_ClockConfig size 3 (short enums, AM13+MSPM0), TOBJ1018 C28 padding word, size 10.
