@@ -53,6 +53,19 @@ class ParserTests(unittest.TestCase):
             "label": "gMCANBitTimes.nomTimeSeg1", "old": "78", "new": "38", "file": "config.c", "line": 4,
         }])
 
+    def test_regenerate_ignores_compiler_outputs_and_lists_them(self):
+        reference = self.output / "reference"
+        generated = self.output / "generated"
+        reference.mkdir(); generated.mkdir()
+        (reference / "config.h").write_text("same\n", encoding="utf-8")
+        (generated / "config.h").write_text("same\n", encoding="utf-8")
+        for name in ("board.obj", "board.lst", "x.o", "x.d", "x.dot", "x.pp", "x.rov.xs"):
+            (reference / name).write_text("compiler output\n", encoding="utf-8")
+        result = syscfg_run.compare_generated(generated, reference)
+        self.assertEqual(result["status"], "identical")
+        self.assertEqual(result["ignored"],
+                         ["board.lst", "board.obj", "x.d", "x.dot", "x.o", "x.pp", "x.rov.xs"])
+
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):

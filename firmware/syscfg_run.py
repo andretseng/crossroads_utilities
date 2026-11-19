@@ -17,7 +17,7 @@ import project_facts  # noqa: E402
 from sdk_inventory import DEFAULT_ROOT, inventory  # noqa: E402
 
 
-IGNORED_SUFFIXES = {".o", ".d", ".dot"}
+IGNORED_SUFFIXES = {".obj", ".lst", ".o", ".d", ".dot", ".pp", ".rov.xs"}
 PARAMETER_WORDS = ("BAUD", "IBRD", "FBRD", "PRESCAL", "DIV", "PERIOD", "LOAD")
 DEFINE_RE = re.compile(r"^\s*#define\s+([A-Za-z_]\w*)\s+(.+?)\s*$")
 STRUCT_RE = re.compile(r"\bstatic\s+const\s+([A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*)\s+([A-Za-z_]\w*)\s*=\s*\{")
@@ -102,13 +102,20 @@ def diff_facts(before, after):
 def compare_generated(generated, reference):
     generated, reference = Path(generated), Path(reference) if reference else None
     if reference is None:
-        return {"status": "not available (explicit mode)", "files": []}
+        return {"status": "not available (explicit mode)", "files": [], "ignored": []}
     if not reference.is_dir():
-        return {"status": f"reference directory missing: {reference}", "files": []}
+        return {"status": f"reference directory missing: {reference}", "files": [], "ignored": []}
+    ignored = sorted({path.relative_to(root).as_posix()
+                      for root in (generated, reference)
+                      for path in root.rglob("*")
+                      if path.is_file() and any(path.name.lower().endswith(suffix)
+                                                for suffix in IGNORED_SUFFIXES)})
     generated_files = {path.relative_to(generated): path for path in generated.rglob("*")
-                       if path.is_file() and path.suffix.lower() not in IGNORED_SUFFIXES}
+                       if path.is_file() and not any(path.name.lower().endswith(suffix)
+                                                     for suffix in IGNORED_SUFFIXES)}
     reference_files = {path.relative_to(reference): path for path in reference.rglob("*")
-                       if path.is_file() and path.suffix.lower() not in IGNORED_SUFFIXES}
+                       if path.is_file() and not any(path.name.lower().endswith(suffix)
+                                                     for suffix in IGNORED_SUFFIXES)}
     rows = []
     for name in sorted(set(generated_files) | set(reference_files)):
         if name not in reference_files:
@@ -117,7 +124,7 @@ def compare_generated(generated, reference):
             rows.append({"file": name.as_posix(), "difference": "reference only"})
         elif not filecmp.cmp(generated_files[name], reference_files[name], shallow=False):
             rows.append({"file": name.as_posix(), "difference": "content differs"})
-    return {"status": "identical" if not rows else "different", "files": rows}
+    return {"status": "identical" if not rows else "different", "files": rows, "ignored": ignored}
 
 
 def diagnostics(output, exit_code=0):
@@ -315,6 +322,7 @@ def render(result):
             if label == "base":
                 check = run["regenerate"]
                 out += ["", "## Regenerate check", "", f"- {check['status']}"]
+                out += ["- ignored build outputs: " + (", ".join(check["ignored"]) or "none")]
                 out += [f"- {item['file']}: {item['difference']}" for item in check["files"]]
             out += [""] + _facts_markdown(run["facts"], f"{label.capitalize()} facts")
     if "diff" in result:
