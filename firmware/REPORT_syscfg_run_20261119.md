@@ -6,7 +6,7 @@ Scope: `SPEC_syscfg_run.md`
 
 ## Outcome
 
-Implemented `syscfg_run.py` as a standard-library-only wrapper around `project_facts.py`. It copies every input `.syscfg` into a fresh `/tmp/syscfg_run.XXXX` directory, runs the exact build-selected SysConfig command with only the script and output paths redirected to that workspace, and never edits a project or SDK file.
+Implemented `syscfg_run.py` as a standard-library-only wrapper around `project_facts.py`. Facts mode passes the original `.syscfg` path to SysConfig and redirects only `-o` to a fresh `/tmp/syscfg_run.XXXX` directory. What-if mode copies the script's project directory into that workspace, excluding CCS build directories declared by `.cproject`, and edits the copied script. Keeping the script's relative location preserves project-relative resources such as `dab_F28003x/solution.js`. Neither mode edits a project or SDK file.
 
 The CLI supports:
 
@@ -14,7 +14,7 @@ The CLI supports:
 - `PROJECT_DIR --build NAME whatif 'instance.property = value' [...]`
 - explicit mode with `--sysconfig`, repeated `--product`, repeated `--script`/`--context`, and optional `--compiler`/`--device`
 - Markdown output and `--json`
-- exit 3 without running SysConfig when `project_facts` marks the selected build stale, never built, or foreign
+- exit 3 without running SysConfig when `project_facts` marks the selected build stale, never built, or foreign, or when a build-recorded SDK `product.json` is missing
 
 ## Extracted facts
 
@@ -31,31 +31,34 @@ Every result prints `meaning of encoded fields: check the SDK header / TRM (T3)`
 
 ## Tests
 
-Seven `unittest` tests pass:
+Ten `unittest` tests pass:
 
 1. Fixture parser: exact clock, numeric-define, struct-field, and pin values/locations.
 2. Fixture diff: only `gMCANBitTimes.nomTimeSeg1` changes from 78 to 38.
-3. Explicit-mode fake CLI: runs on a copy and leaves the source `.syscfg` unchanged.
-4. Rejected fake what-if: exact diagnostic appears under `WHATIF ERRORS` and no successful facts are emitted.
-5. Real escape32 DRV8300 base plus 500-kbit/s what-if.
-6. Real rejected MCAN rate with TI's diagnostic asserted verbatim.
-7. Never-built Release configuration: exit 3, exact `ASK USER`, and no SysConfig execution.
+3. Explicit-mode fake CLI: runs what-if on a copy and leaves the source `.syscfg` unchanged.
+4. Facts mode passes the original script path and loads its relative fixture resource.
+5. What-if copies the relative fixture resource and excludes the declared `Debug` build directory.
+6. Rejected fake what-if: exact diagnostic appears under `WHATIF ERRORS` and no successful facts are emitted.
+7. Real escape32 DRV8300 base plus 500-kbit/s what-if.
+8. Real rejected MCAN rate with TI's diagnostic asserted verbatim.
+9. Never-built Release configuration: exit 3, exact `ASK USER`, and no SysConfig execution.
+10. Missing AM261 SDK/product metadata: exact install-or-rebuild `ASK USER` and no SysConfig execution.
 
 Command run:
 
 ```text
 python3 -m unittest -v test_syscfg_run.py
-Ran 7 tests ... OK
+Ran 10 tests ... OK
 ```
 
 ## Project verification
 
 | Family/project/build | Result | Evidence |
 |---|---|---|
-| AM13 — `escape32_drv8300_lp-am13e230x`, Debug | Verified | SysConfig 1.28.1 exited 0 in about 1 second; regenerated files were identical to `Debug/syscfg` after ignoring `.o`, `.d`, `.dot`; parsed 10 clocks, 239 top-level computed fields/selected numeric defines, and 6 pin comments. `CPUCLK_FREQ_HZ = 200000000`; base `gMCANBitTimes.nomTimeSeg1 = 78`; 500-kbit/s what-if gives 38 and DIFF reports it. |
-| MSPM0 — `gpio_toggle_output_LP_MSPM0G5187_nortos_ticlang`, Debug | Not verified | The build-selected SysConfig 1.28.1 exited 1 while attempting to update read-only `/home/andre/TI_pinmux/products.json`: `Error: EROFS: read-only file system, open '/home/andre/TI_pinmux/products.json'`. No generated facts were reported. |
-| C2000 F28003x — `dab_F28003x`, RELEASE | Not verified | SysConfig 1.21.0 exited 1 with the same read-only `~/TI_pinmux/products.json` error. No generated facts were reported. |
-| AM261 multi-core — `servo_drive_am261x-lp_r5fss0-1`, Debug | Not verified | SysConfig 1.25.0 exited 1 because the build-recorded `/home/andre/ti/ind_comms_sdk_am261x_2025_00_00_08/.metadata/product.json` does not exist. The command retained both scripts and their `r5fss0-0`/`r5fss0-1` contexts. |
+| AM13 — `escape32_drv8300_lp-am13e230x`, Debug | Verified | SysConfig 1.28.1 exited 0 in 1.035 s; regenerated files were identical to `Debug/syscfg` after ignoring `.o`, `.d`, `.dot`; parsed 10 clocks, 239 top-level computed fields/selected numeric defines, and 6 pin comments. `CPUCLK_FREQ_HZ = 200000000`; base `gMCANBitTimes.nomTimeSeg1 = 78`; 500-kbit/s what-if gives 38 and DIFF reports it. |
+| MSPM0 — `gpio_toggle_output_LP_MSPM0G5187_nortos_ticlang`, Debug | Verified | Outside the restricted filesystem sandbox, build-selected SysConfig 1.28.1 exited 0 in 0.814 s; parsed `CPUCLK_FREQ = 32000000`, 1 clock, 0 selected parameters, and 5 pins. `Debug/syscfg` does not exist, so no regenerate comparison was available. The earlier `~/TI_pinmux/products.json` EROFS result was caused by the test sandbox, not the project. |
+| C2000 F28003x — `dab_F28003x`, RELEASE | Verified | SysConfig 1.21.0 facts mode exited 0 in 1.067 s with the original `main.syscfg`; parsed 3 clocks. A harmless what-if on the copied project also exited 0 for both base and copied script, proving `solution.js` remains resolvable. The regenerate comparison differs only because four `.lst`/`.obj` reference files are not generated by SysConfig. |
+| AM261 multi-core — `servo_drive_am261x-lp_r5fss0-1`, Debug | Correctly blocked | The build-recorded `/home/andre/ti/ind_comms_sdk_am261x_2025_00_00_08/.metadata/product.json` does not exist. The wrapper now stops before execution, prints `ASK USER: install /home/andre/ti/ind_comms_sdk_am261x_2025_00_00_08 or rebuild with an installed SDK`, and exits 3. |
 
 ## Real diagnostic format
 
@@ -70,8 +73,8 @@ Both lines are preserved verbatim in output. Because the what-if was rejected, n
 
 ## Open points
 
-- SysConfig versions used by the tested MSPM0 and C2000 projects attempt to write product-discovery state under `~/TI_pinmux`, outside the required temporary workspace. The read-only environment prevented that write. I did not change `HOME`, grant write access, or substitute another SysConfig version.
-- The tested AM261 build references an absent 2025 industrial-communications SDK. I did not replace it with the installed 2026 SDK because that would no longer be the build's own command.
+- TI SysConfig updates product-discovery state under `~/TI_pinmux`. Initial in-sandbox MSPM0/C2000/AM13 attempts failed with EROFS; the reported real-project results were rerun outside that restricted sandbox. The scripts and generated outputs still followed the required read-only-source and `/tmp` rules.
+- The tested AM261 build references an absent 2025 industrial-communications SDK. The wrapper does not substitute the installed 2026 SDK because that would no longer be the build's own command.
 - Multiple-script what-if mode appends assignments to the first copied script while preserving every script/context in the command. Selecting a different context needs an explicit interface decision.
 - Parser output records generated C expressions as text. Interpreting whether a value is encoded as “actual minus one” remains a T3 SDK-header/TRM task.
 - Python 3.13 was not available on crossroads; execution was verified on Python 3.10.12 using only 3.10-compatible standard-library APIs.

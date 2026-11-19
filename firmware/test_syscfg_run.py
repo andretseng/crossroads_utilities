@@ -59,7 +59,8 @@ class RunnerTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         self.script = root / "input.syscfg"
-        self.script.write_text("rate = 250;\n", encoding="utf-8")
+        self.script.write_text("rate = 250;\nload('resource.txt');\n", encoding="utf-8")
+        (root / "resource.txt").write_text("relative resource\n", encoding="utf-8")
         self.product = root / "product.json"
         self.product.write_text("{}\n", encoding="utf-8")
         self.cli = root / "fake_sysconfig.py"
@@ -71,6 +72,9 @@ class RunnerTests(unittest.TestCase):
             script = pathlib.Path(args[args.index('--script') + 1])
             output = pathlib.Path(args[args.index('-o') + 1])
             text = script.read_text()
+            if "load('resource.txt')" in text and not (script.parent / 'resource.txt').is_file():
+                print('Error: missing relative resource')
+                raise SystemExit(1)
             if 'BAD_ASSIGNMENT' in text:
                 print('Error: assignment rejected: BAD_ASSIGNMENT')
                 raise SystemExit(1)
@@ -97,7 +101,32 @@ class RunnerTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertIn("mode: explicit CLI", rendered)
         self.assertIn("timing.segment: 78 -> 38", rendered)
-        self.assertEqual(self.script.read_text(encoding="utf-8"), "rate = 250;\n")
+        self.assertEqual(self.script.read_text(encoding="utf-8"),
+                         "rate = 250;\nload('resource.txt');\n")
+
+    def test_facts_uses_original_script_and_relative_resource(self):
+        result = syscfg_run.calculate(syscfg_run._explicit_mode(syscfg_run.parse_args(self.args("facts"))),
+                                      "facts", [])
+        self.assertEqual(result["base"]["exit_code"], 0, result["base"]["output"])
+        command = result["base"]["command"]
+        self.assertIn(str(self.script), command)
+        self.assertNotIn("script_0_", command)
+
+    def test_whatif_copies_relative_resource_and_excludes_build_folder(self):
+        root = self.script.parent
+        (root / ".cproject").write_text(textwrap.dedent("""\
+            <cproject><configuration name="Debug">
+            <folderInfo><toolChain superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_1.0"/></folderInfo>
+            </configuration></cproject>
+        """), encoding="utf-8")
+        (root / "Debug").mkdir()
+        (root / "Debug" / "large.o").write_text("do not copy", encoding="utf-8")
+        mode = syscfg_run._explicit_mode(syscfg_run.parse_args(self.args("whatif", "rate = 500")))
+        result = syscfg_run.calculate(mode, "whatif", ["rate = 500"])
+        self.assertEqual(result["whatif"]["exit_code"], 0, result["whatif"]["output"])
+        copied_script = Path(result["whatif"]["command"].split("--script ", 1)[1].split()[0])
+        self.assertTrue((copied_script.parent / "resource.txt").is_file())
+        self.assertFalse((copied_script.parent / "Debug").exists())
 
     def test_rejected_whatif_error_is_verbatim_and_has_no_success_facts(self):
         output = io.StringIO()
@@ -150,6 +179,20 @@ class Escape32IntegrationTests(unittest.TestCase):
         self.assertEqual(status, 3)
         self.assertIn("ASK USER: rebuild Release in CCS, then run project_facts again", output.getvalue())
         self.assertIn("SysConfig was not run", output.getvalue())
+
+
+class MissingSdkIntegrationTests(unittest.TestCase):
+    PROJECT = Path("/home/andre/workspace_ccstheia/motor/servo_drive_am261x-lp_r5fss0-1")
+
+    def test_missing_product_sdk_stops_before_sysconfig(self):
+        if not self.PROJECT.is_dir():
+            self.skipTest("AM261 project is absent")
+        mode = syscfg_run._project_mode(self.PROJECT, "Debug")
+        self.assertTrue(mode["blocked"])
+        self.assertIn(
+            "install /home/andre/ti/ind_comms_sdk_am261x_2025_00_00_08 or rebuild with an installed SDK",
+            mode["asks"],
+        )
 
 
 if __name__ == "__main__":

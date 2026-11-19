@@ -151,16 +151,50 @@ def _replace_output(tokens, output_dir):
     return result
 
 
-def _copy_scripts(tokens, scripts, workspace, assignments=()):
-    workspace.mkdir(parents=True, exist_ok=True)
-    result, replacements = list(tokens), {}
-    for index, source in enumerate(scripts):
-        source_path = Path(source)
-        if not source_path.is_file():
+def _build_names(project):
+    """Return CCS build directories declared by a project's .cproject."""
+    try:
+        return {entry["name"] for entry in project_facts.cproject_builds(project)}
+    except (OSError, ValueError):
+        return set()
+
+
+def _copy_project(source_root, target_root):
+    """Copy source material while excluding declared CCS build directories."""
+    build_names = _build_names(source_root)
+
+    def ignore(path, names):
+        if Path(path) == source_root:
+            return [name for name in names if name in build_names]
+        return []
+
+    shutil.copytree(source_root, target_root, ignore=ignore)
+
+
+def _whatif_scripts(mode, workspace, assignments):
+    """Copy script-containing projects, preserving project-relative resources."""
+    result, replacements = list(mode["tokens"]), {}
+    copied_roots = {}
+    primary = mode.get("project")
+    roots = []
+    if primary:
+        roots.append(Path(primary).resolve())
+    for source in mode["scripts"]:
+        parent = Path(source).resolve().parent
+        if not any(parent == root or root in parent.parents for root in roots):
+            roots.append(parent)
+    for index, root in enumerate(roots):
+        target_root = workspace / f"project_{index}_{root.name}"
+        _copy_project(root, target_root)
+        copied_roots[root] = target_root
+    for index, source in enumerate(mode["scripts"]):
+        source_path = Path(source).resolve()
+        matching = max((root for root in roots if source_path == root or root in source_path.parents),
+                       key=lambda path: len(path.parts))
+        target = copied_roots[matching] / source_path.relative_to(matching)
+        if not target.is_file():
             raise FileNotFoundError(f"SysConfig script not found: {source}")
-        target = workspace / f"script_{index}_{source_path.name}"
-        shutil.copy2(source_path, target)
-        if assignments and index == 0:
+        if index == 0:
             with target.open("a", encoding="utf-8") as stream:
                 stream.write("\n// syscfg_run.py what-if\n")
                 for assignment in assignments:
@@ -169,7 +203,8 @@ def _copy_scripts(tokens, scripts, workspace, assignments=()):
     for index, token in enumerate(result):
         if token in replacements:
             result[index] = replacements[token]
-    return result
+    primary_copy = copied_roots.get(Path(primary).resolve()) if primary else None
+    return result, primary_copy or next(iter(copied_roots.values()))
 
 
 def _project_mode(project, build_name):
@@ -181,6 +216,13 @@ def _project_mode(project, build_name):
     installed = inventory([DEFAULT_ROOT])
     facts = project_facts.build_facts(project, entry, project_facts.syscfg_headers(project), installed)
     asks = []
+    missing_sdks = [sdk["path"] for sdk in facts.get("sdks", [])
+                    if not sdk.get("exists", True) and sdk.get("path")]
+    missing_products = [path for path in (facts.get("sysconfig") or {}).get("product_jsons", [])
+                        if not Path(path).is_file()]
+    if missing_products:
+        sdk_path = missing_sdks[0] if missing_sdks else str(Path(missing_products[0]).parent.parent)
+        asks.append(f"install {sdk_path} or rebuild with an installed SDK")
     if facts["foreign"]:
         asks.append(f"rebuild {build_name} on this machine")
     if not facts["built"] or facts["stale"]:
@@ -219,17 +261,19 @@ def calculate(mode, action, assignments):
               "meaning": "meaning of encoded fields: check the SDK header / TRM (T3)"}
     base_output = workspace / "base_output"
     base_tokens = _replace_output(mode["tokens"], base_output)
-    base_tokens = _copy_scripts(base_tokens, mode["scripts"], workspace / "base_scripts")
-    base_run = run_command(base_tokens, workspace, base_output)
+    # Facts mode deliberately runs the original script. SysConfig reads it but
+    # writes generated material only to the redirected output directory.
+    base_cwd = Path(mode.get("project") or Path(mode["scripts"][0]).resolve().parent)
+    base_run = run_command(base_tokens, base_cwd, base_output)
     result["base"] = base_run
     if base_run["exit_code"] == 0 and not base_run["errors"]:
         result["base"]["facts"] = parse_generated(base_output)
         result["base"]["regenerate"] = compare_generated(base_output, mode["reference"])
     if action == "whatif" and base_run["exit_code"] == 0 and not base_run["errors"]:
         whatif_output = workspace / "whatif_output"
-        whatif_tokens = _replace_output(mode["tokens"], whatif_output)
-        whatif_tokens = _copy_scripts(whatif_tokens, mode["scripts"], workspace / "whatif_scripts", assignments)
-        whatif_run = run_command(whatif_tokens, workspace, whatif_output)
+        whatif_tokens, whatif_cwd = _whatif_scripts(mode, workspace / "whatif", assignments)
+        whatif_tokens = _replace_output(whatif_tokens, whatif_output)
+        whatif_run = run_command(whatif_tokens, whatif_cwd, whatif_output)
         result["whatif"] = whatif_run
         if whatif_run["exit_code"] == 0 and not whatif_run["errors"]:
             result["whatif"]["facts"] = parse_generated(whatif_output)
