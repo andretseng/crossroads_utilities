@@ -154,6 +154,110 @@ def options(tokens, *names):
     return values
 
 
+# Flags that select the output object / dependency file or consume the following value; they are
+# irrelevant (and often invalid) when measuring a probe instead of the real source, so compile_command
+# drops them.  A CCS recipe attaches the value with no space (``-o$@`` ``-MFfile`` ``-MT$(@)``), so a
+# flag is dropped whether it stands alone or carries an attached value.  The C2000 side-output flags
+# (``--preproc_with_compile``, ``--asm_listing``, ``-k``, ``--preproc_dependency=…``) and the make
+# variable ``$(GEN_OPTS__FLAG)`` are likewise never valid probe arguments.
+_COMPILE_DROP = {"-c", "-o", "-obj_directory", "--obj_directory", "-asm_directory", "--asm_directory",
+                 "-save-temps", "-dependency-file", "-MD", "-MMD", "-MP", "-MF", "-MT", "-fixincl",
+                 "-fixinclx", "$(GEN_OPTS__FLAG", "--preproc_with_compile", "--asm_listing", "-k",
+                 "--preproc_dependency"}
+# Drop flags that may carry an *attached* value with no space (``-o$@``, ``-MFfile``, ``-MT$(@)``).
+# Every other drop flag (``-c``, ``-MMD``, ...) matches only exactly and consumes no following token.
+_ATTACHED_VALUE_DROP = {"-o", "-MF", "-MT"}
+# Any token that is a make expansion (``$(shell echo $<)``, ``$(GEN_OPTS__FLAG)``, or a value that
+# merely *contains* ``$(…)``, as in ``--preproc_dependency=device/$(basename $(<F)).d_raw``) is a make
+# leftover and must be dropped.
+_MAKELEFTOVER = re.compile(r"\$\(")
+
+
+def _expand_response_file(token: str, build_dir: Path) -> str:
+    """Return the contents of a ``@file`` response token (path relative to ``build_dir``)."""
+    response = token[1:]  # strip the leading '@'
+    path = Path(response) if Path(response).is_absolute() else build_dir / Path(response)
+    if not path.is_file():
+        return token
+    return path.read_text(encoding="utf-8", errors="replace").strip()
+
+
+def _strip_quotes(token: str) -> str:
+    """Turn ``-I\"/path\"`` into ``-I/path`` and ``-D\"NAME\"`` into ``-DNAME``; leave others alone."""
+    if "\"" not in token:
+        return token
+    # ``-I=value`` form.
+    if "=" in token:
+        base, value = token.split("=", 1)
+        return base + "=" + value.strip("\"")
+    # ``-I\"path\"`` or ``-D\"NAME\"``: flag letters directly followed by a quoted value.
+    match = re.match(r"^(-?[A-Za-z][A-Za-z0-9_-]*)(.*)$", token)
+    if match and match.group(2).startswith("\""):
+        return match.group(1) + match.group(2).strip("\"")
+    return token
+
+
+def compile_command(project: Path, build_name: str, source: str | None = None) -> tuple[str, list[str]]:
+    """Return ``(compiler, args)`` for a build's compile recipe, with response files expanded.
+
+    CCS writes include/define flags into a response file and invokes the compiler as
+    ``<tool> -c @ccsIncludes.opt …``; ``compile_command`` reads that file (relative to the build
+    folder) and splices its tokens in.  Output/dependency flags (``-c -o -MMD -MP -MF …``) are
+    removed because they target the real object, not a probe.  When ``source`` is given the recipe
+    for that source is preferred, else the first compile recipe in the build."""
+    project = Path(project)
+    build_dir = project / build_name
+    makefiles, _mode = recipe_makefiles(build_dir)
+    compiles, _sysconfig = recipes(makefiles)
+    if not compiles:
+        return "", []
+    # Prefer the named source; otherwise take the first compile recipe (CCS uses one recipe shape).
+    chosen = None
+    if source:
+        for entry in compiles:
+            if Path(entry[0]).name == source or entry[0].endswith(source.replace("\\", "/")):
+                chosen = entry; break
+    if chosen is None:
+        chosen = compiles[0]
+    tokens = list(chosen[1])
+    # First token is the compiler; expand any @response file that appears anywhere in the recipe.
+    # shlex.split (not str.split) so quoted paths with spaces survive as a single token.
+    compiler = tokens[0]
+    recipe = tokens[1:]  # args only; the compiler is returned separately.
+    expanded: list[str] = []
+    index = 0
+    while index < len(recipe):
+        token = recipe[index]
+        if token.startswith("@"):
+            expanded.extend(shlex.split(_expand_response_file(token, build_dir)))
+        else:
+            expanded.append(token)
+        index += 1
+    # The recipe's final token is the source file handed to the compiler (``../a.c``); it is not an
+    # argument we want to forward to the probe, so drop it.
+    if expanded and Path(expanded[-1]).name != compiler:
+        expanded.pop()
+    # Drop output/dependency flags (matched exactly, so ``-code_state=16`` is not dropped as ``-c``),
+    # then unquote -I"/path" -> -I/path.  Only the attached-value flags consume a following token.
+    args: list[str] = []
+    index = 0
+    while index < len(expanded):
+        token = expanded[index]
+        if token in _COMPILE_DROP or any(token.startswith(f) for f in _ATTACHED_VALUE_DROP) or any(token.startswith(f + "=") for f in _COMPILE_DROP):
+            # ``-o$@`` / ``-MFfile`` / ``-MT$(@)`` carry an attached value (``-MFa.d``); every other
+            # drop flag (``-c``, ``-MMD``, ...) matches exactly and consumes nothing extra.
+            index += 2 if token in _ATTACHED_VALUE_DROP else 1
+            continue
+        # Any make leftover: a token that starts with ``$`` or contains a ``$(…)`` expansion
+        # (``$(shell echo $<)``, ``$(GEN_OPTS__FLAG)``, ``--preproc_dependency=…$(basename $(<F))…``).
+        if token.startswith("$") or _MAKELEFTOVER.search(token):
+            index += 1
+            continue
+        args.append(_strip_quotes(token))
+        index += 1
+    return compiler, args
+
+
 def sdk_home(path):
     """The nearest folder at or above path holding SysConfig product metadata."""
     path = Path(path)
