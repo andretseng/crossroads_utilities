@@ -24,7 +24,7 @@ class Platforms(unittest.TestCase):
 
     def test_unknown_compiler_is_an_error_not_a_guess(self):
         with self.assertRaises(KeyError):
-            platforms.for_compiler("/usr/bin/gcc")
+            platforms.for_compiler("/usr/bin/sdcc")  # unknown family; gcc became "gnu" in preprocess round 3
 
 
 class Split(unittest.TestCase):
