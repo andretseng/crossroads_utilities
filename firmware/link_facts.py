@@ -16,8 +16,10 @@ Standard library only, Python 3.10+.
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -468,6 +470,791 @@ def cmd_overlaps(src):
 
 
 # --------------------------------------------------------------------------- #
+# .cmd (linker command file) parsing — rules / whatif-cmd (Part 2, D9)
+# --------------------------------------------------------------------------- #
+
+# A linker command file is a C-preprocessor text with three constructs we read:
+#   MEMORY { NAME : ORIGIN = 0xN, LENGTH = 0xN ... }      -> memory regions
+#   name = 0xN;                                           -> symbol / value assignments
+#   SECTIONS { .sec : load = A, run = B, > 0xADDR, ... }  -> section placements
+# We do NOT write a full .cmd parser: for whatif-cmd we let the linker do the work
+# (copy the file, apply the change, relink). Here we only read the static structure.
+
+
+def _strip_cmd_comments(text: str) -> str:
+    """Remove C-style /* ... */ and // ... comments from .cmd text (line numbers preserved)."""
+    out_lines = []
+    for line in text.splitlines():
+        # block comment that started on an earlier line
+        if "/*" in line and "*/" not in line:
+            out_lines.append("")
+            continue
+        head, sep, tail = line.partition("/*")
+        if sep:
+            line = head
+        # // line comment
+        idx = line.find("//")
+        if idx >= 0:
+            line = line[:idx]
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def _expand_cmd_file(build_dir: Path, cmd_path: Path) -> tuple[str, list[int]]:
+    """Preprocess a .cmd file with the build's own compiler and return (text, line_map).
+
+    The .cmd is a C-preprocessor input, so we let the linker/compiler do the `#define` / `#if`
+    work instead of hand-rolling it. **clang** family: ``<compiler> -E -x c <cmd>``. **TI legacy**
+    (cl2000/cl7x/clpru): ``<compiler> --preproc_only --preproc_with_line <build flags> <cmd>``;
+    the output goes to a ``.pp`` file next to the input. ``--preproc_with_line`` (not ``-P``) keeps
+    ``# N \"file\"`` line markers so we can map preprocessed lines back to the .cmd.
+
+    Returns the preprocessed text and ``line_map[i]`` = the 1-based .cmd line that output line ``i``
+    came from (tracked through the ``# N`` markers, exactly as the preprocessor does for C)."""
+    family = compiler_family_for_build(build_dir)
+    recipe = _link_recipe(build_dir)
+    tokens = shlex_split_recipe(recipe) if recipe else []
+    # The compiler is the first token of the link recipe.
+    compiler = None
+    for tok in tokens:
+        if not tok.startswith("-") and ("cl2000" in tok or "tiarmclang" in tok or "c29clang" in tok
+                                         or tok.endswith("cl2000") or "/bin/" in tok):
+            compiler = tok
+            break
+    if compiler is None and tokens:
+        compiler = tokens[0]
+    if compiler is None or not Path(compiler).is_file():
+        # No compiler available (e.g. never-built build): fall back to comment stripping only.
+        raw = cmd_path.read_text(encoding="utf-8", errors="replace")
+        stripped = _strip_cmd_comments(raw).splitlines()
+        return "\n".join(stripped), list(range(1, len(stripped) + 1))
+
+    is_ti_legacy = family in ("c2000", "c7000", "c6000", "pru")
+    # Pass the build's own --define / --abi / etc. so #if defined(X) evaluates as the linker would.
+    flags = _cmd_preproc_flags(tokens)
+    # Send the preprocessor output to a /tmp directory: projects are read-only and cl2000's
+    # --preproc_only writes <name>.pp next to the input by default.
+    pp_dir = Path(tempfile.mkdtemp(prefix="link_cmd_pre_"))
+    if is_ti_legacy:
+        cmd = [compiler, "--preproc_only", "--preproc_with_line", "--pp_directory", str(pp_dir)] + flags + [str(cmd_path)]
+        proc = subprocess.run(cmd, cwd=str(build_dir), capture_output=True, text=True, timeout=120)
+        pp_path = pp_dir / (cmd_path.name[:-4] + ".pp") if cmd_path.name.endswith(".cmd") else pp_dir / (cmd_path.name + ".pp")
+        if not pp_path.is_file():
+            # cl2000 writes the .pp next to the input; if absent, fall back.
+            fallback = cmd_path.with_suffix(".pp")
+            pp_path = fallback
+        text = pp_path.read_text(encoding="utf-8", errors="replace")
+        raw_lines = cmd_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    else:
+        # clang: -E -x c keeps line markers (# N "file"); -P would drop them (tests need lines).
+        cmd = [compiler, "-E", "-x", "c"] + flags + [str(cmd_path)]
+        proc = subprocess.run(cmd, cwd=str(build_dir), capture_output=True, text=True, timeout=120)
+        text = proc.stdout
+        raw_lines = cmd_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    line_map = _map_preproc_lines(text, raw_lines)
+    return text, line_map
+
+
+def _cmd_preproc_flags(tokens: list[str]) -> list[str]:
+    """Build flags for the .cmd preprocessor: --define / --abi / -V from the build recipe."""
+    flags = []
+    for i, tok in enumerate(tokens):
+        if tok.startswith("--define="):
+            flags.append(tok)
+        elif tok.startswith("-D"):
+            flags.append(tok)
+        elif tok.startswith("--abi="):
+            flags.append(tok)
+        elif tok == "--abi" and i + 1 < len(tokens):
+            flags.append(tok); flags.append(tokens[i + 1]); i += 1
+        elif tok.startswith("-V"):
+            flags.append(tok)
+    return flags
+
+
+def _map_preproc_lines(text: str, raw_lines: list[str]) -> list[int]:
+    """Map each preprocessed output line to its 1-based source (.cmd) line via ``# N`` markers.
+
+    Returns a list with ONE entry per output line (same length as ``text.splitlines()``). Marker
+    lines (``# N``) get their own ``N``; content lines get the source line the preprocessor's
+    ``# N`` markers assign to them (a run of marker-less lines increments from the last marker)."""
+    out_lines = text.splitlines()
+    line_map = []
+    pending = None   # set by a '# N' marker: this output line is source line N
+    src_line = 0     # last assigned source line (for runs without markers)
+    for line in out_lines:
+        m = re.match(r"^#\s+(\d+)", line)
+        if m:
+            src = int(m.group(1))
+            pending = src
+            src_line = src
+            line_map.append(min(src, len(raw_lines)))
+        else:
+            if pending is not None:
+                src = pending
+                src_line = pending  # subsequent lines increment from here
+                pending = None
+            else:
+                src = src_line + 1
+                src_line = src
+            # clamp to the real .cmd length (markers can overshoot on trailing directives)
+            line_map.append(min(src, len(raw_lines)))
+    return line_map
+
+
+def _cmd_value_to_int(value: str):
+    """Return int(value) when value is a number (0x.. or decimal), else the raw text."""
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return int(value, 0)
+    except ValueError:
+        return value
+
+
+def parse_cmd_file(build_dir: Path, path: Path, defines: list[str] | None = None) -> dict:
+    """Parse a linker command file into {memory, symbols, sections} with file:line for each.
+
+    Each entry carries ``file`` (the .cmd path) and ``line`` (1-based .cmd line number). Values are
+    int where they are numbers, else the text (e.g. a region name in a section's ``> REGION``).
+
+    The .cmd is preprocessed with the build's own compiler (see ``_expand_cmd_file``) so that
+    `#define` / `#if defined(X)` are handled exactly as the linker would; the ``# N`` line markers
+    from the preprocessor map every emitted line back to its .cmd line."""
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    text, line_map = _expand_cmd_file(build_dir, path)
+    lines = text.splitlines()
+
+    memory = []
+    symbols = []
+    sections = []
+
+    index = 0
+    n = len(lines)
+    while index < n:
+        line = lines[index]
+        stripped = line.strip()
+        # MEMORY {   (the { may sit on the next line in TI .cmd files)
+        if stripped == "MEMORY" or re.match(r"^MEMORY\s*{$", stripped):
+            # skip a lone { on the following line
+            if stripped == "MEMORY" and index + 1 < n and lines[index + 1].strip() == "{":
+                index += 2
+            else:
+                index += 1
+            while index < n and lines[index].strip() != "}":
+                # origin/length are lowercase in TI C28x .cmd files and uppercase in clang ones.
+                # A region attribute list like ``(RX)`` may sit between the name and the colon.
+                m = re.match(
+                    r"\s*(\S+)\s*(?:\([^)]*\))?\s*:\s*(?:ORIGIN|origin)\s*=\s*"
+                    r"(0x[0-9A-Fa-f]+|\d+)\s*,\s*(?:LENGTH|length)\s*=\s*(0x[0-9A-Fa-f]+|\d+)",
+                    lines[index])
+                if m:
+                    name, origin, length = m.group(1), m.group(2), m.group(3)
+                    memory.append({
+                        "name": name,
+                        "origin": _cmd_value_to_int(origin),
+                        "length": _cmd_value_to_int(length),
+                        "file": str(path),
+                        "line": line_map[index] if index < len(line_map) else index + 1,
+                    })
+                index += 1
+            index += 1  # skip the closing }
+            continue
+        # SECTIONS {   (the { may sit on the next line in TI .cmd files)
+        if stripped == "SECTIONS" or re.match(r"^SECTIONS\s*{$", stripped):
+            if stripped == "SECTIONS" and index + 1 < n and lines[index + 1].strip() == "{":
+                index += 2
+            else:
+                index += 1
+            while index < n and lines[index].strip() != "}":
+                entry, index = _parse_cmd_section(lines, index, str(path), line_map)
+                if entry:
+                    sections.append(entry)
+            index += 1  # skip the closing }
+            continue
+        # top-level assignment:  name = value ;   (not inside MEMORY/SECTIONS, no leading dot-section)
+        m = re.match(r"^\s*([A-Za-z_][\w$]*)\s*=\s*([^;]+);\s*$", stripped)
+        if m:
+            name = m.group(1)
+            value = m.group(2).strip()
+            # take the first token of the value (an address or number); ignore trailing tokens
+            first = value.split()[0] if value.split() else value
+            symbols.append({
+                "name": name,
+                "value": _cmd_value_to_int(first),
+                "file": str(path),
+                "line": line_map[index] if index < len(line_map) else index + 1,
+            })
+        index += 1
+    return {"memory": memory, "symbols": symbols, "sections": sections}
+
+
+def _parse_cmd_section(lines: list[str], index: int, cmd_file: str, line_map: list[int] | None = None):
+    """Parse one SECTIONS entry starting at ``lines[index]``; return (entry_or_None, next_index).
+
+    A section entry is ``.name : > REGION``, ``.name : >> REGION``, ``.name : palign(8) {} > REGION``,
+    or ``.name : load = A, run = B, ...``. It may continue over several physical lines: while the
+    current line ends with a comma, or while an opening ``{`` has not yet been closed, more lines
+    are consumed. The placement (``> REGION`` / ``>> REGION``) may sit on a later line, e.g.
+    ``.vectors : {\n}\n> R5F_VECS``. ``palign``/`{}`/`table(...)`/`LOAD_START`/… are ignored."""
+    first = lines[index]
+    m = re.match(r"^\s*(\.[\w.]+|[A-Za-z_]\w*)\s*:\s*(.*)$", first)
+    if not m:
+        return None, index + 1
+    name = m.group(1)
+    rest = m.group(2)
+    load = None
+    run = None
+    direct = None  # "> REGION" or ">> REGION" keeps the region text (possibly an A | B | C list)
+    line_no = (line_map[index] if line_map and index < len(line_map) else index + 1)
+    open_braces = rest.count("{") - rest.count("}")
+    # consume continuation lines: keep going while the line ends with a comma, or while a brace
+    # block opened on this entry has not yet been closed (``.vectors : { ... } > REGION``).
+    while True:
+        text = rest
+        ml = re.search(r"\bload\s*=\s*(\S+?)(?:,|$)", text)
+        if ml:
+            load = ml.group(1)
+        mr = re.search(r"\brun\s*=\s*(\S+?)(?:,|$)", text)
+        if mr:
+            run = mr.group(1)
+        # ">>" or ">" placement: take the region text that follows the ">", skipping any
+        # palign()/table()/load-start()/ALIGN() filler and any {} member block that precedes it.
+        md = re.search(r">>?\s*((?:[A-Za-z_][\w$.]*\s*(?:\|\s*[A-Za-z_][\w$.]*\s*)*))", text)
+        if md and (load is None and run is None):
+            direct = md.group(1).rstrip(",").strip()
+        # stop when this line has no trailing comma AND the brace block (if any) is closed
+        brace_open = text.count("{") - text.count("}")
+        if not text.rstrip().endswith(",") and brace_open <= 0:
+            break
+        index += 1
+        if index >= len(lines):
+            break
+        rest = lines[index]
+    if direct is not None and run is None:
+        run = direct
+        if load is None:
+            load = direct
+    entry = {
+        "name": name,
+        "load": load,
+        "run": run,
+        "file": cmd_file,
+        "line": line_no,
+    }
+    return entry, index + 1
+
+
+# --------------------------------------------------------------------------- #
+# .cmd discovery from the makefile (ORDERED_OBJS)
+# --------------------------------------------------------------------------- #
+
+def cmd_files_from_makefile(build_dir: Path) -> list[str]:
+    """Return the .cmd file(s) named in the build's link recipe.
+
+    The primary source is ``$(ORDERED_OBJS)`` (the link recipe). SysConfig-generated linker files
+    are not in ORDERED_OBJS: they arrive through ``GEN_CMDS__FLAG`` as ``-Wl,-l"...cmd"`` tokens
+    (e.g. ``-Wl,-l"./device_linker.cmd"`` for MSPM0, ``-Wl,-l"syscfg/linker.cmd"`` for AM261), so
+    the whole makefile is scanned for those too. Every ``.cmd`` token is resolved relative to the
+    build folder. When the build folder has no makefile (a never-built build), fall back to the
+    project's ``linker/`` folder."""
+    makefile = build_dir / "makefile"
+    text = makefile.read_text(encoding="utf-8", errors="replace") if makefile.is_file() else ""
+    cmd_files = []
+    if text:
+        text = re.sub(r"\\\r?\n", " ", text)
+        # 1) $(ORDERED_OBJS): every ".cmd" token in the variable definition.
+        ordered = _makefile_variable(text, "ORDERED_OBJS")
+        cmd_files.extend(_cmd_tokens_from_ordered(ordered, build_dir))
+        # 2) SysConfig linker files: -Wl,-l"...cmd" / -l"...cmd" anywhere in the makefile.
+        cmd_files.extend(_cmd_tokens_from_genflags(text, build_dir))
+    if cmd_files:
+        return cmd_files
+    # Fallback: a never-built build has no makefile; look in the project's linker/ folder.
+    linker_dir = build_dir.parent / "linker"
+    if linker_dir.is_dir():
+        for path in sorted(linker_dir.glob("*.cmd")):
+            cmd_files.append(str(path.resolve()))
+    return cmd_files
+
+
+def _cmd_tokens_from_genflags(text: str, build_dir: Path) -> list[str]:
+    """Return .cmd paths named by SysConfig ``-Wl,-l"...cmd"`` / ``-l"...cmd"`` tokens."""
+    cmd_files = []
+    # -Wl,-l"path" or -l"path" (also -Wl,-l path without quotes, and -Wl,-l./x.cmd).
+    for m in re.finditer(r"(?:-Wl,)?-l\s*([\"']?[^\s\"']+\.cmd[\"']?)", text):
+        token = m.group(1).strip('"\'')
+        p = Path(token)
+        if p.is_absolute():
+            cmd_files.append(str(p))
+        else:
+            cmd_files.append(str((build_dir / p).resolve()))
+    # de-duplicate, keep order
+    seen = set()
+    unique = []
+    for c in cmd_files:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+    return unique
+
+
+def _cmd_tokens_from_ordered(ordered: str, build_dir: Path) -> list[str]:
+    """Return the resolved .cmd paths from an ORDERED_OBJS token string."""
+    if not ordered:
+        return []
+    cmd_files = []
+    for token in shlex_split_recipe(ordered):
+        if token.lower().endswith(".cmd"):
+            p = Path(token)
+            if p.is_absolute():
+                cmd_files.append(str(p))
+            else:
+                cmd_files.append(str((build_dir / p).resolve()))
+    # de-duplicate, keep order
+    seen = set()
+    unique = []
+    for c in cmd_files:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+    return unique
+
+
+def _makefile_variable(text: str, name: str) -> str:
+    """Return the (possibly multi-line, +=) value of a makefile variable as one string."""
+    out = []
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        row = lines[index]
+        m = re.match(rf"^\s*{re.escape(name)}\s*(?:\+?=|\?:|:=)?\s*(.*)$", row)
+        if m:
+            chunk = m.group(1)
+            # strip a trailing backslash-continuation marker, collect the next line(s)
+            while chunk.rstrip().endswith("\\"):
+                chunk = chunk.rstrip()[:-1]
+                out.append(chunk.strip())
+                index += 1
+                if index < len(lines):
+                    chunk = lines[index]
+                else:
+                    break
+            out.append(chunk.strip())
+        index += 1
+    return " ".join(out)
+
+
+def shlex_split_recipe(text: str) -> list[str]:
+    """Split a makefile recipe/token string, honouring backslash-newline continuations and quotes."""
+    text = re.sub(r"\\\r?\n", " ", text)
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+# --------------------------------------------------------------------------- #
+# linker --define flags for .cmd preprocessing
+# --------------------------------------------------------------------------- #
+
+def linker_defines(build_dir: Path) -> list[str]:
+    """Return the build's linker --define flags (from the link recipe) for .cmd preprocessing."""
+    makefile = build_dir / "makefile"
+    if not makefile.is_file():
+        return []
+    text = makefile.read_text(encoding="utf-8", errors="replace")
+    recipe = None
+    for row in text.splitlines():
+        if "$(ORDERED_OBJS)" in row:
+            recipe = row
+            break
+    if not recipe:
+        return []
+    tokens = shlex_split_recipe(recipe)
+    defines = []
+    for i, tok in enumerate(tokens):
+        if tok.startswith("--define=") or (tok.startswith("-D") and not tok.startswith("-D")):
+            # -DNAME or --define=NAME
+            if tok.startswith("--define="):
+                defines.append(tok.split("=", 1)[1])
+            elif "=" in tok:
+                defines.append(tok[2:])
+            else:
+                defines.append(tok[2:])
+    return defines
+
+
+# --------------------------------------------------------------------------- #
+# rules command
+# --------------------------------------------------------------------------- #
+
+def cmd_rules(build_dir, project, build_name, facts) -> dict:
+    """Read the build's .cmd file(s): memory, symbol/value assignments, section placements.
+
+    ``basis`` is "rules only" when the build was never built (no link result to merge), else
+    "rules" with each section augmented by its placed load/run from the linkInfo."""
+    defines = linker_defines(build_dir)
+    cmd_files = cmd_files_from_makefile(build_dir)
+    if not cmd_files:
+        # No makefile-named .cmd: nothing to read.
+        return {"basis": "rules only", "cmd_files": [], "memory": [], "symbols": [], "sections": []}
+
+    merged = {"memory": [], "symbols": [], "sections": []}
+    for cmd_path in cmd_files:
+        p = Path(cmd_path)
+        if not p.is_file():
+            continue
+        parsed = parse_cmd_file(build_dir, p, defines)
+        merged["memory"].extend(parsed["memory"])
+        merged["symbols"].extend(parsed["symbols"])
+        merged["sections"].extend(parsed["sections"])
+
+    basis = "rules only"
+    if facts and facts.get("built"):
+        basis = "rules"
+        placed = _placed_sections_from_linkxml(build_dir)
+        for sec in merged["sections"]:
+            info = placed.get(sec["name"])
+            if info:
+                sec["placed_run"] = info.get("run")
+                sec["placed_load"] = info.get("load")
+    return {"basis": basis, "cmd_files": cmd_files, **merged}
+
+
+def _placed_sections_from_linkxml(build_dir: Path) -> dict:
+    """section name -> {run, load} from the build's _linkInfo.xml (the link result)."""
+    xml_path = None
+    for path in sorted(build_dir.glob("*_linkInfo.xml"), key=lambda p: p.stat().st_mtime, reverse=True):
+        xml_path = path
+        break
+    if xml_path is None:
+        return {}
+    try:
+        src = LinkXML(xml_path)
+    except Exception:
+        return {}
+    out = {}
+    for comp in src.components:
+        out.setdefault(comp["name"], {})
+        if comp["run_address"] is not None:
+            out[comp["name"]]["run"] = comp["run_address"]
+        if comp["load_address"] is not None:
+            out[comp["name"]]["load"] = comp["load_address"]
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# whatif-cmd command
+# --------------------------------------------------------------------------- #
+
+def cmd_whatif(build_dir, project, build_name, facts, replacements: list[tuple[str, str]]) -> dict:
+    """Apply --replace OLD NEW edits to the build's .cmd, relink into /tmp, never touch the project.
+
+    Each OLD must occur exactly once in the .cmd (else exit 2 with the count). The relink uses the
+    build's own link recipe, the existing .o files, and writes -o / -m / --xml_link_info into /tmp."""
+    cmd_files = cmd_files_from_makefile(build_dir)
+    if not cmd_files:
+        print(f"{ASK_USER}: no .cmd named in the build's ORDERED_OBJS in {build_dir}", file=sys.stderr)
+        return {"linked": False, "exit_code": 2, "errors": ["no .cmd found"], "script_exit": 2}
+
+    # Work in a fresh /tmp dir; copy the .cmd(s) there and apply the edits.
+    work = Path(tempfile.mkdtemp(prefix="link_facts_whatif_"))
+    cmd_targets = []
+    diff_regions = []
+    for cmd_path in cmd_files:
+        p = Path(cmd_path)
+        if not p.is_file():
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        # Remember the MEMORY region (name, length) pairs so a bare ``length = 0xN`` fragment can be
+        # attributed to the region it belongs to (the test replaces ``length = 0x00020000`` and
+        # expects name "FLASH").
+        region_info = _memory_region_info(text)
+        dest = work / p.name
+        new_text = text
+        for old, new in replacements:
+            count = text.count(old)
+            if count != 1:
+                # OLD must occur exactly once; report the count and stop (exit 2).
+                sys.stderr.write(f"error: replacement text occurred {count} times (expected 1) in {p.name}: {old!r}\n")
+                return {"linked": False, "exit_code": 2,
+                        "errors": [f"replacement text occurred {count} times (expected 1) in {p.name}"],
+                        "script_exit": 2}
+            new_text = new_text.replace(old, new)
+            diff_regions.append({"name": _region_name_from_line(old, region_info), "field": "length",
+                                 "old": _length_from_line(old), "new": _length_from_line(new)})
+        dest.write_text(new_text, encoding="utf-8")
+        cmd_targets.append(str(dest))
+
+    if not cmd_targets:
+        return {"linked": False, "exit_code": 2, "errors": ["no readable .cmd"], "script_exit": 2}
+
+    # Build the link recipe: copy the build's .out recipe, but point -o/-m/--xml_link_info at /tmp.
+    recipe = _link_recipe(build_dir)
+    if not recipe:
+        print(f"{ASK_USER}: could not find the .out link recipe in {build_dir}/makefile", file=sys.stderr)
+        return {"linked": False, "exit_code": 2, "errors": ["no link recipe"], "script_exit": 2}
+
+    # Verify the .o files the recipe needs exist (relink needs real objects).
+    if not _recipe_objects_present(build_dir, recipe):
+        print(f"{ASK_USER}: some object files the build links are missing in {build_dir}", file=sys.stderr)
+        return {"linked": False, "exit_code": 3, "errors": ["missing objects"], "script_exit": 3}
+
+    out_name = build_dir.name + ".out"
+    map_name = build_dir.name + ".map"
+    xml_name = build_dir.name + "_linkInfo.xml"
+    makefile_text = (build_dir / "makefile").read_text(encoding="utf-8", errors="replace")
+    cmd = shlex_split_recipe(recipe)
+    # Expand every make variable the recipe references ($(ORDERED_OBJS), $(GEN_CMDS__FLAG), …) so
+    # SysConfig-generated linker files that arrive through GEN_CMDS__FLAG reach the linker.
+    expanded = _expand_make_vars(cmd, makefile_text)
+    # Rewrite -o / -m / --xml_link_info to point into /tmp.
+    new_cmd = _redirect_link_outputs(expanded, str(work / out_name), str(work / map_name), str(work / xml_name))
+    # Substitute the .cmd token(s) with the /tmp copies. The linker file may be a standalone token
+    # (``.../x.cmd``) or embedded in a driver flag (``-Wl,-l"syscfg/linker.cmd"``); handle both.
+    new_cmd = _substitute_cmd_tokens(new_cmd, cmd_targets)
+
+    # Relink with cwd = build folder (so relative .o paths and -i lib paths resolve), outputs in /tmp.
+    proc = subprocess.run(new_cmd, cwd=str(build_dir), capture_output=True, text=True, timeout=240)
+    combined = (proc.stdout + proc.stderr)
+    errors = [ln for ln in combined.splitlines() if ln.strip()]
+    linked = proc.returncode == 0
+
+    result = {
+        "linked": linked,
+        "exit_code": proc.returncode,
+        "errors": errors,
+        "script_exit": 0,   # the script ran successfully; the linker's outcome is in the JSON
+    }
+    if linked:
+        # a successful link keeps only real linker errors in ``errors`` (drop warnings such as
+        # ``#10247-D: creating output section …`` that the .cmd emits even when it is seen);
+        # the verbatim full output is still available to the caller via the process exit code.
+        result["errors"] = [ln for ln in errors if not ln.strip().startswith("warning")]
+        result["diff"] = {"regions": diff_regions, "symbols": []}
+    else:
+        # keep only the linker's own error lines (drop the trailing "tiarmclang: error:" wrapper)
+        result["errors"] = [ln for ln in errors if "#" in ln or "error" in ln.lower()]
+    return result
+
+
+def _region_name_from_line(line: str, region_info: list[tuple[str, int | None]] = None) -> str:
+    """Return the memory-region name a replacement refers to.
+
+    Handles a full ``NAME : ORIGIN = …`` line (``NAME`` may be followed by an ``(RX)`` attribute)
+    and a bare ``length = …`` / ``origin = …`` fragment: when the fragment carries no name, the
+    MEMORY region whose ``LENGTH`` matches the fragment's value is used, else the sole region name,
+    else ``""``."""
+    m = re.search(r"(\S+)\s*(?:\([^)]*\))?\s*:\s*ORIGIN", line)
+    if m:
+        return m.group(1)
+    # bare fragment like ``length = 0xN`` — resolve the region from the .cmd MEMORY section
+    val = _length_from_line(line)
+    if region_info and val is not None:
+        for rn, rlen in region_info:
+            if rlen == val:
+                return rn
+        if len(region_info) == 1:
+            return region_info[0][0]
+    return ""
+
+
+def _region_length(name: str, text: str = "") -> int | None:
+    """Return the LENGTH of the named MEMORY region, or None."""
+    m = re.search(
+        rf"\b{re.escape(name)}\s*(?:\([^)]*\))?\s*:\s*(?:ORIGIN|origin)\s*=\s*(?:0x[0-9A-Fa-f]+|\d+)\s*,\s*"
+        rf"(?:LENGTH|length)\s*=\s*(0x[0-9A-Fa-f]+|\d+)",
+        text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1), 0)
+    except ValueError:
+        return None
+
+
+def _memory_region_info(text: str) -> list[tuple[str, int | None]]:
+    """Return ``(name, length)`` pairs for every MEMORY region declared in ``text`` (in order)."""
+    info = []
+    for m in re.finditer(
+        r"^\s*(\S+)\s*(?:\([^)]*\))?\s*:\s*(?:ORIGIN|origin)\s*=\s*(?:0x[0-9A-Fa-f]+|\d+)\s*,\s*"
+        r"(?:LENGTH|length)\s*=\s*(0x[0-9A-Fa-f]+|\d+)",
+        text, re.M):
+        try:
+            length = int(m.group(2), 0)
+        except ValueError:
+            length = None
+        info.append((m.group(1), length))
+    return info
+
+
+def _length_from_line(line: str):
+    """Return the numeric value in a ``LENGTH = 0xN`` / ``length = 0xN`` / ``ORIGIN = 0xN`` fragment.
+
+    Works on a full ``NAME : ORIGIN = …, LENGTH = …`` line or a bare ``length = 0xN`` fragment."""
+    m = re.search(r"(?:LENGTH|length)\s*=\s*(0x[0-9A-Fa-f]+|\d+)", line)
+    if not m:
+        m = re.search(r"(?:ORIGIN|origin)\s*=\s*(0x[0-9A-Fa-f]+|\d+)", line)
+    if not m:
+        return None
+    val = m.group(1)
+    try:
+        return int(val, 0)
+    except ValueError:
+        return val
+
+
+def _link_recipe(build_dir: Path) -> str:
+    """Return the raw link recipe line (the makefile line expanding $(ORDERED_OBJS))."""
+    makefile = build_dir / "makefile"
+    if not makefile.is_file():
+        return ""
+    text = makefile.read_text(encoding="utf-8", errors="replace")
+    for row in text.splitlines():
+        if "$(ORDERED_OBJS)" in row:
+            return row
+    return ""
+
+
+def _recipe_objects_present(build_dir: Path, recipe: str) -> bool:
+    """True when every ``./name.o`` object referenced by the recipe exists in the build folder."""
+    for tok in shlex_split_recipe(recipe):
+        if tok.endswith(".o") and not tok.startswith("-"):
+            p = build_dir / tok
+            if not p.is_file():
+                return False
+    return True
+
+
+def _expand_make_vars(tokens: list[str], makefile_text: str) -> list[str]:
+    """Expand make variables referenced by the link recipe.
+
+    ``$(ORDERED_OBJS)`` expands to the object / .cmd / ``-l`` tokens, but SysConfig-generated linker
+    files arrive through ``$(GEN_CMDS__FLAG)`` (e.g. ``-Wl,-l\"syscfg/linker.cmd\"``), which is itself
+    referenced inside ORDERED_OBJS. Expansion is recursive so nested ``$(NAME)`` references resolve.
+    Variables with no definition are dropped."""
+    # Collect the variable definitions the recipe can reference.
+    names = set(re.findall(r"\$\(([A-Za-z_][A-Za-z0-9_]*)\)", makefile_text))
+    defs = {n: _makefile_variable(makefile_text, n) for n in names}
+
+    def expand_tokens(toks):
+        out = []
+        for tok in toks:
+            if tok.startswith("$(") and tok.endswith(")"):
+                name = tok[2:-1]
+                value = defs.get(name, "")
+                if value:
+                    out.extend(expand_tokens(shlex_split_recipe(value)))
+                # undefined variable -> drop
+            else:
+                out.append(tok)
+        return out
+
+    return expand_tokens(tokens)
+
+
+def _substitute_cmd_tokens(cmd: list[str], cmd_targets: list[str]) -> list[str]:
+    """Replace the linker-file token(s) in the recipe with the /tmp copies.
+
+    Handles both a standalone ``.../x.cmd`` token and a driver flag ``-Wl,-l\"syscfg/linker.cmd\"``
+    (the SysConfig ``GEN_CMDS__FLAG`` form): the ``.cmd`` path inside each is rewritten to the
+    copied ``.cmd``. Tokens are paired with ``cmd_targets`` in order."""
+    if not cmd_targets:
+        return cmd
+    target = cmd_targets[0]
+    out = []
+    used = 0
+    for tok in cmd:
+        # standalone .cmd token (a real file argument, not a flag)
+        if not tok.startswith("-") and tok.lower().endswith(".cmd"):
+            if used < len(cmd_targets):
+                out.append(cmd_targets[used])
+                used += 1
+            continue
+        # embedded in a -Wl,-l"...cmd" / -l"...cmd" driver flag. Pass the path without extra quotes
+        # (subprocess.run gets a list, so the shell does not strip quotes for us).
+        m = re.match(r'^(.*-l)([^"]*)\.cmd(.*)$', tok)
+        if m and used < len(cmd_targets):
+            out.append(m.group(1) + target + m.group(3))
+            used += 1
+        else:
+            out.append(tok)
+    return out
+
+
+def _redirect_link_outputs(cmd, out_path, map_path, xml_path):
+    """Rewrite -o / -m / --xml_link_info values in a link recipe to point into /tmp.
+
+    Only the linker map (`-m"file"` / `-Wl,-m"file"`) and `--xml_link_info` are rewritten; the
+    ARM architecture flags (`-mcpu`, `-mfloat-abi`, `-mfpu`, `-mlittle-endian`, `-mthumb`, ...) are
+    left untouched. Quoted paths keep their quotes so the clang driver keeps getting
+    ``-Wl,-m"…"`` rather than a bare ``-m…``."""
+    # ARM architecture / FPU flags that start with -m but must not be treated as the map flag.
+    _ARM_MFLAGS = ("-mcpu", "-mfloat-abi", "-mfpu", "-mlittle-endian", "-mthumb", "-mmode",
+                   "-mtp", "-msuper", "-mfix-cm3", "-mno")
+    new = list(cmd)
+    i = 0
+    while i < len(new):
+        tok = new[i]
+        # -o <file>  or  -o<file>
+        if tok == "-o" or tok == "--output":
+            if i + 1 < len(new):
+                new[i + 1] = out_path
+                i += 2
+                continue
+        if tok.startswith("-o") and not tok.startswith("--"):
+            new[i] = "-o" + out_path
+            i += 1
+            continue
+        # -Wl,-m"file"  or  -m"file"  (the linker map flag). Rewrite the path in place so the clang
+        # driver keeps getting ``-Wl,-m"…"`` rather than a bare ``-m…``. Quotes are optional because
+        # shlex strips them before we get here.
+        m = re.match(r'^(.*-Wl,?-m)([^"]*)$', tok, re.I)
+        if m:
+            new[i] = m.group(1) + map_path
+            i += 1
+            continue
+        if not tok.startswith(_ARM_MFLAGS) and re.match(r'^-m"', tok, re.I):
+            new[i] = '-m' + map_path
+            i += 1
+            continue
+        # --xml_link_info="file"  or  -Wl,--xml_link_info="file"
+        m = re.match(r'^(.*--xml_link_info=)([^"]*)$', tok, re.I)
+        if m:
+            new[i] = m.group(1) + xml_path
+            i += 1
+            continue
+        m = re.match(r'^--xml_link_info=([^"]*)$', tok, re.I)
+        if m:
+            new[i] = '--xml_link_info="' + xml_path + '"'
+            i += 1
+            continue
+        i += 1
+    return new
+
+def _parse_replacements(names: list[str]) -> list[tuple[str, str]]:
+    """Parse the ``whatif-cmd`` positional args into [(OLD, NEW), ...].
+
+    The CLI form is ``whatif-cmd --replace OLD NEW [--replace OLD NEW ...]``; by the time we reach
+    here each ``--replace`` has been expanded to three positionals (``--replace`` OLD NEW), so we
+    skip the ``--replace`` markers and pair the remaining tokens."""
+    pairs = []
+    i = 0
+    while i < len(names):
+        if names[i] == "--replace":
+            if i + 2 < len(names):
+                pairs.append((names[i + 1], names[i + 2]))
+                i += 3
+            else:
+                i += 1
+        else:
+            i += 1
+    return pairs
+
+
+# --------------------------------------------------------------------------- #
 # Source selection
 # --------------------------------------------------------------------------- #
 
@@ -510,6 +1297,10 @@ def main(argv=None):
             flags["unit"] = tok.split("=", 1)[1]; i += 1; continue
         if tok == "--json":
             flags["json"] = True; i += 1; continue
+        if tok == "--replace":
+            # whatif-cmd --replace OLD NEW: keep the pair as positionals for _parse_replacements.
+            positionals.append(tok); positionals.append(tokens[i + 1]); positionals.append(tokens[i + 2])
+            i += 3; continue
         positionals.append(tok); i += 1
     args = argparse.Namespace(xml=flags["xml"], map=flags["map"], unit=flags["unit"],
                               json=flags["json"], build=flags["build"])
@@ -542,6 +1333,37 @@ def main(argv=None):
         print(f"{ASK_USER}: --build NAME required", file=sys.stderr)
         sys.exit(EXIT_STALE)
     facts_by_name = resolve_build(project)
+
+    # rules / whatif-cmd are build-recipe commands; they take their context from build_ctx.
+    if command in ("rules", "whatif-cmd"):
+        facts = facts_by_name.get(args.build)
+        if facts is None:
+            print(f"{ASK_USER}: unknown build {args.build!r}", file=sys.stderr)
+            sys.exit(EXIT_STALE)
+        build_dir = project / args.build
+        # whatif-cmd needs a real, fresh build (it relinks real objects); rules need only the .cmd.
+        if command == "whatif-cmd":
+            if not facts["built"]:
+                print(f"{ASK_USER}: {args.build} was never built; build it in CCS then run link_facts again",
+                      file=sys.stderr)
+                sys.exit(EXIT_STALE)
+            for item in facts["foreign"]:
+                print(f"{ASK_USER}: {args.build} was generated on {item['os']} ({item['path']}); rebuild on this machine",
+                      file=sys.stderr)
+                sys.exit(EXIT_STALE)
+            if facts["stale"]:
+                print(f"{ASK_USER}: {facts['stale'][0]}; rebuild {args.build} in CCS, then run link_facts again",
+                      file=sys.stderr)
+                sys.exit(EXIT_STALE)
+        ctx = {
+            "project": project,
+            "build_dir": build_dir,
+            "build_name": args.build,
+            "facts": facts,
+            "replacements": _parse_replacements(names),
+        }
+        return emit(args, None, None, command, names, build_ctx=ctx)
+
     build_dir = select_and_check(project, facts_by_name, args.build)
 
     family = compiler_family_for_build(build_dir)
@@ -584,7 +1406,16 @@ def main(argv=None):
     return emit(args, src, unit, command, names, ignored, xml_path=str(xml_path), map_path=str(map_path))
 
 
-def emit(args, src, unit, command, names, ignored=None, xml_path=None, map_path=None):
+def emit(args, src, unit, command, names, ignored=None, xml_path=None, map_path=None, build_ctx=None):
+    # rules / whatif-cmd are build-recipe commands; they take their context from build_ctx.
+    if command in ("rules", "whatif-cmd"):
+        data = _cmd_build_recipe(command, names, build_ctx)
+        if args.json:
+            print(json.dumps(data, indent=1))
+        else:
+            sys.stdout.write(render_markdown(command, data, src))
+        # whatif-cmd carries its own exit code (0 ran fine; 2 bad replacement; 3 ASK USER).
+        return int(data.get("script_exit", 0))
     if command == "summary":
         data = cmd_summary(src, unit, ignored or [], xml_path=xml_path, map_path=map_path)
     elif command == "symbol":
@@ -603,10 +1434,67 @@ def emit(args, src, unit, command, names, ignored=None, xml_path=None, map_path=
     return 0
 
 
+def _cmd_build_recipe(command, names, ctx) -> dict:
+    """Dispatch the build-recipe commands (rules / whatif-cmd) from shared build context."""
+    if command == "rules":
+        return cmd_rules(ctx["build_dir"], ctx["project"], ctx["build_name"], ctx["facts"])
+    if command == "whatif-cmd":
+        return cmd_whatif(ctx["build_dir"], ctx["project"], ctx["build_name"], ctx["facts"], ctx["replacements"])
+
+
 def render_markdown(command, data, src):
     """Human-readable Markdown. The JSON contract is the machine interface; this is the
     default view. Where a text-map line backs a value, cite it as file:line."""
-    lines = [f"## link_facts — command: {command} (source: {getattr(data, 'source', src.source)})", ""]
+    source = getattr(data, "source", None)
+    if source is None and src is not None:
+        source = getattr(src, "source", None)
+    lines = [f"## link_facts — command: {command} (source: {source})", ""]
+    if command == "rules":
+        lines.append(f"basis: {data['basis']}")
+        lines.append("")
+        if data.get("cmd_files"):
+            lines.append(".cmd files:")
+            for p in data["cmd_files"]:
+                lines.append(f"  - {p}")
+            lines.append("")
+        if data.get("memory"):
+            lines.append("MEMORY:")
+            lines.append("| name | origin | length | file:line |")
+            lines.append("|--|--:|--:|------|")
+            for m in data["memory"]:
+                lines.append(f"| {m['name']} | 0x{m['origin']:x} | 0x{m['length']:x} | {m['file']}:{m['line']} |")
+            lines.append("")
+        if data.get("symbols"):
+            lines.append("ASSIGNMENTS:")
+            lines.append("| name | value | file:line |")
+            lines.append("|--|--:|------|")
+            for s in data["symbols"]:
+                val = s["value"]
+                val = f"0x{val:x}" if isinstance(val, int) else str(val)
+                lines.append(f"| {s['name']} | {val} | {s['file']}:{s['line']} |")
+            lines.append("")
+        if data.get("sections"):
+            lines.append("SECTIONS:")
+            lines.append("| section | load | run | file:line |")
+            lines.append("|--|--|--|------|")
+            for s in data["sections"]:
+                lines.append(f"| {s['name']} | {s.get('load')} | {s.get('run')} | {s['file']}:{s['line']} |")
+            lines.append("")
+        return "\n".join(lines) + "\n"
+    if command == "whatif-cmd":
+        lines.append(f"linked: {data['linked']}")
+        lines.append(f"linker exit code: {data['exit_code']}")
+        if data.get("errors"):
+            lines.append("")
+            lines.append("linker output:")
+            for ln in data["errors"]:
+                lines.append(f"  {ln}")
+        if data.get("diff"):
+            lines.append("")
+            lines.append("region changes:")
+            for r in data["diff"]["regions"]:
+                lines.append(f"  {r['name']}.{r['field']}: 0x{r['old']:x} -> 0x{r['new']:x}")
+        return "\n".join(lines) + "\n"
     if command == "summary":
         lines.append(f"Entry point: {data['entry']['name']} @ 0x{data['entry']['address']:x} "
                      f"({data['entry']['address']})")
