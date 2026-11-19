@@ -22,3 +22,16 @@ CLI: `preprocess.py PROJECT --build B FILE [--lines A-B]` | `preprocess.py --sdk
   "lines": [{"line": int, "compiled": true|false|null, "expanded": str|null}]}` for the requested range (default whole file).
 Tests: test_preprocess.py (given, do not edit). Standard library + unifdef only. Work in /tmp/preprocess_pi/. Same stop rule.
 Uses platforms.py from the D10 split (copied in when the split is accepted).
+
+## Round 3 (Claude, 2026-11-19, user-approved): where partial mode gets its symbols, and plain repo makefiles
+1. `--partial FILE --from-cproject PROJECT --build B`: seed known symbols from that build's `.cproject` defines/undefines
+   (`project_facts.cproject_builds`). Entries with unresolved `${...}` are NOT known: list them in `"unresolved"`. Symbols not in
+   the list stay UNKNOWN (an unresolved `${...}` may define them). Mark `"defines_source": "cproject (inferred)"`.
+   Explicit `--define`/`--undefine` are added on top (`"defines_source": "cproject (inferred) + command line"`).
+   Without --from-cproject: `"defines_source": "command line"`.
+2. `--make-dir DIR [--make-file NAME] [--make-var K=V ...] FILE`: a repo without CCS (e.g. from GitHub): run `make -s -n -B`
+   (dry run, writes nothing) in DIR, take the compile line naming FILE, drop -c/-o/-M*, run the compiler's preprocessor.
+   `"level": "make"`. The sdk_make level is the same mechanism; keep `--sdk-make` working.
+3. platforms.py: host/cross GNU compilers (`gcc`, `cc`, `arm-none-eabi-gcc`, any `*-gcc`) -> family_kind "gnu", unit byte;
+   preprocessing like clang (-E -C -dD). Still no guessing for unknown compilers (KeyError).
+Tests: test_preprocess_review3.py.
