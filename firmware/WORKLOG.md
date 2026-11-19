@@ -17,3 +17,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPO
 ## Log
 - 13:53 item 1a: struct_layout + compile_command merged (6 rounds). Unseen checks: DL_TimerG_ClockConfig size 3 (short enums, AM13+MSPM0), TOBJ1018 C28 padding word, size 10.
 - 13:55 item 1b split sent to Pi; item 3 preprocess spec+tests ready (/tmp/preprocess_pi), real values verified (io.c:178, config.h:51/54, psc.c:153/156, dab_main.c:162).
+- 13:59 item 1 done: split accepted (6 real cases identical before/after).
