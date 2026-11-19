@@ -35,3 +35,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/repo
 - 16:20 preprocess round 1: gate OK, review1 sent (comment lines in active branch reported false = misleading; an earlier Pi version rewrote dab_F28003x/RELEASE/dab_main.obj at 15:40 by compiling in the build folder - content should equal the build's, but the file was rewritten; user informed).
 - 16:42 preprocess review2 passed; round 3 sent (.cproject-seeded partial, plain make, gnu family) - user-approved.
 - 16:58 item 3 done: preprocess accepted after 3 rounds (+ my own test conflict fixed: test_backends sdcc). Spot checks: echoback, Debug_TIMER .cproject seed (config.h 51 true / 54 false).
+- 18:00 found: tools fell back to ~/utilities imports, so tests in /tmp used the repo's backends and hid Pi deleting record_layout. Fixed repo tools (own folder only) and accept.sh (merge check + fake HOME + import check).
