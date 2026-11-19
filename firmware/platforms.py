@@ -30,6 +30,8 @@ _PLATFORMS = {
     "clpru": {"family_kind": "ti_legacy", "unit": "byte", "endian": "little"},
     "arm": {"family_kind": "ti_legacy", "unit": "byte", "endian": "little"},
     "armcl": {"family_kind": "ti_legacy", "unit": "byte", "endian": "little"},
+    # GNU host/cross compilers (gcc, cc, arm-none-eabi-gcc, any *-gcc): preprocess like clang.
+    "gnu": {"family_kind": "gnu", "unit": "byte", "endian": "little"},
 }
 
 # compiler file name -> family token, so a raw compiler path resolves straight to a platform.
@@ -41,6 +43,8 @@ _FAMILY_BY_NAME = {
     "cl6x": "c6000",
     "clpru": "pru",
     "armcl": "arm",
+    "gcc": "gnu",
+    "cc": "gnu",
 }
 
 
@@ -50,7 +54,12 @@ def for_compiler(path: str) -> dict:
     Raises ``KeyError`` for a compiler whose family is not in the table -- the front end turns this
     into an ASK USER / exit 3, never a guess."""
     name = Path(path).name.lower().removesuffix(".exe")
-    family = _FAMILY_BY_NAME.get(name, name)
+    # A cross toolchain name ends in ``-gcc`` (e.g. ``arm-none-eabi-gcc``); treat any such name as
+    # GNU. Otherwise match the exact known name.
+    if name.endswith("-gcc"):
+        family = "gnu"
+    else:
+        family = _FAMILY_BY_NAME.get(name, name)
     try:
         return _PLATFORMS[family]
     except KeyError:
