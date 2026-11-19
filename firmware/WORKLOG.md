@@ -26,3 +26,6 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPO
 - 14:04 reg_decode (T3) spec+tests ready (CCCTL_01 139264 -> COC CAPTURE, ZCOND CC_TRIG_FALL; C2000 TBCTL 0x40B m_s).
 - 14:05 asm_view spec+tests ready (codestartbranch.asm 81/83/100, WD_DISABLE).
 - 14:05 item 8 note tools spec+tests ready (~/utilities/notes).
+- 14:15 assignment plan: Pi lane = link_cmd (running) -> preprocess -> asm_view -> notes -> reg_decode -> config_calls.
+  Codex lane (quota back ~14:55) = c_eval + c_facts (T5, AST-heavy, needs backends.evaluate first). T7 SDK register index folded
+  into reg_decode later (`--list PREFIX`), not a separate tool.
