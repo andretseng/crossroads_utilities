@@ -12,6 +12,7 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPO
 5. T3 field decode, T7 SDK register index, T5 AST
 6. offline acceptance: r1-r26 error types vs tools
 7. flow proposals (vault only)
+8. note tools in ~/utilities/notes/ (D11: note_tables, note_check, tw_wording, note_recheck) — queued by user 2026-11-19, after 1-6
 
 ## Log
 - 13:53 item 1a: struct_layout + compile_command merged (6 rounds). Unseen checks: DL_TimerG_ClockConfig size 3 (short enums, AM13+MSPM0), TOBJ1018 C28 padding word, size 10.
