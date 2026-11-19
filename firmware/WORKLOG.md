@@ -21,3 +21,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPO
 - item 6 done (analysis, vault note §6.4): 30 value-type errors; preprocess 8, source_lines 5, syscfg_run 2, tw 1; 14 need T5 -> T5 moved before items 4/asm. T5 part 1 c_eval spec+tests ready (values verified: IO_CC^1=1, 833, C28 sizeof(int)=1, (int)40000=-25536, ISR*2=30000).
 - Order now: link_cmd (Pi, running) -> preprocess -> c_eval -> c_facts (AST) -> config_calls -> asm_view -> T3/T7 -> note tools.
 - 14:02 c_facts spec+tests ready (io.c sendbuf/recvbuf: else-if parent, ?: values 0x10/0x08, assignment paths, !n++).
+- 14:02 item 7 done: flow proposals P1-P10 in vault note §8c (not implemented). Vault note committed (not pushed).
