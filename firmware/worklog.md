@@ -46,3 +46,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/repo
 - 20:15 asm_view accepted after review1: accept.sh 44 tests + merge check OK; Codex independently matched unseen F28P65x cl2000 listing values and AM261 tiarmclang `.S` preprocessing, verified nonexistent-source error and unchanged projects.
 - 20:18 notes sent to Pi in /tmp/notes_pi from commit 7c31455; gate is test_notes.py with independent vault/citation/table checks and no edits to the vault or notes.
 20:30 notes independently checked with temporary vault/source fixtures; Pi gate 6 tests OK, merge check OK, promoted four lowercase tools.
+20:36 reg_decode dispatched to Pi in /tmp/reg_decode_pi; waiting exclusively on its finish event (no polling).
