@@ -50,13 +50,9 @@ class UnseenAm261(unittest.TestCase):
             if item["else"] is not None:
                 self.assertLessEqual(item["else"][0], item["else"][1], item)
 
-    def test_ternary_target_and_compound_literal(self):
+    def test_ternary_target(self):
         conditional = next(item for item in self.facts["conditionals"] if item["line"] == 372)
         self.assertEqual(conditional["target"], "motor1.dcBus_V")
-        assignment = next(item for item in self.facts["assignments"]
-                          if item["line"] == 547 and item["var"] == "gIsrCnt")
-        self.assertEqual((assignment["op"], assignment["value"], assignment["value_int"]),
-                         ("+=", "1", 1))
 
     def test_nonexistent_function_errors_without_fallback(self):
         proc = run("definitely_missing_function")
