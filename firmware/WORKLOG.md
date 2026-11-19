@@ -29,3 +29,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPO
 - 14:15 assignment plan: Pi lane = link_cmd (running) -> preprocess -> asm_view -> notes -> reg_decode -> config_calls.
   Codex lane (quota back ~14:55) = c_eval + c_facts (T5, AST-heavy, needs backends.evaluate first). T7 SDK register index folded
   into reg_decode later (`--list PREFIX`), not a separate tool.
+- 14:16 user: Codex takes over ONLY after Claude reaches 95% weekly. Codex lane cancelled; Pi lane = link_cmd -> preprocess -> c_eval -> c_facts -> asm_view -> notes -> reg_decode -> config_calls. Handover watch armed (weekly>=95 -> send handoff to Codex).
