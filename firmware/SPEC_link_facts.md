@@ -52,3 +52,12 @@ link_facts.py PROJECT_DIR --build NAME overlaps         # overlapping sections /
 - `overlaps` -> `{"overlaps": [{"a": name, "b": name, "start": int, "end": int}], "over_full": [region names]}` — overlaps between
   object components' run ranges inside the same page, and regions whose used > length.
 - unit: word16 when the build's compiler family is cl2000 (C28x), else byte. Exit 3 + ASK USER as in project_facts.
+
+## Review 1 (Claude, 2026-11-19) — defects found on real projects; tests added to test_link_facts.py
+1. The map/XML must come from the makefile's linker options (`-m"..."` / `-Wl,-m"..."`, `--xml_link_info="..."` /
+   `-Wl,--xml_link_info="..."`), NOT from the newest mtime. Newest-mtime is only the fallback when the makefile names none (say so).
+   AM261 servo r5fss0-0 Debug: makefile names `ipc_notify_echo.Debug.map`.
+2. `ignored` lists only the OTHER map/XML files; the ones in use must never appear there (escape32 listed its current files as old).
+3. Overlaps only between components that are placed in memory: a component counts when its logical group (logical_group_list) is
+   referenced by a placement_map `allocated_space/logical_group_ref`. Debug sections (.debug_*) are not placed and must never appear.
+   For a text map without XML, use the SECTION ALLOCATION MAP and skip sections the map marks as not allocated (COPY/DSECT/debug).
