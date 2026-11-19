@@ -36,3 +36,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/repo
 - 16:42 preprocess review2 passed; round 3 sent (.cproject-seeded partial, plain make, gnu family) - user-approved.
 - 16:58 item 3 done: preprocess accepted after 3 rounds (+ my own test conflict fixed: test_backends sdcc). Spot checks: echoback, Debug_TIMER .cproject seed (config.h 51 true / 54 false).
 - 18:00 found: tools fell back to ~/utilities imports, so tests in /tmp used the repo's backends and hid Pi deleting record_layout. Fixed repo tools (own folder only) and accept.sh (merge check + fake HOME + import check).
+- 18:04 HANDOVER: Claude weekly reached 95%; handoff sent automatically; Codex (pane term_d2b64e10..., 'Take over firmware task') took over supervision. Claude stopped its Pi watcher. Open at handover: c_eval review 2 (Pi restoring record_layout + own-folder imports).
