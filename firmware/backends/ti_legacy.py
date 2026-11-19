@@ -267,3 +267,94 @@ def record_layout(compiler: str, args: str, type_name: str, includes: list[str],
         if byte_size is None:
             raise CompileError("DWARF structure %r has no DW_AT_byte_size" % type_name)
         return {"unit": "word16" if unit_bits == 16 else "byte", "size": byte_size, "members": members}
+
+
+# --------------------------------------------------------------------------- #
+# c_eval back end -- evaluate constant expressions
+# --------------------------------------------------------------------------- #
+
+# The assembly places each constant at an ``||__eN||:`` label, then ``.bits <hex>,64``.
+_LABEL_RE = re.compile(r"\|\|(__e\d+)\|\|:")
+_BITS_RE = re.compile(r"\.bits\s+((?:0x)?[0-9A-Fa-f]+)\s*,\s*64")
+
+
+def _hex_to_signed64(text: str) -> int:
+    """Turn the ``.bits`` hex literal into a signed 64-bit two's-complement integer."""
+    value = int(text, 16)
+    if value >= (1 << 63):
+        value -= 1 << 64
+    return value
+
+
+def _write_probe_cexpr(directory: Path, exprs: list[str], includes: list[str]) -> Path:
+    """Write the probe .c: stdint, the requested includes, then one ``__eN`` per expression."""
+    lines = ["#include <stdint.h>"]
+    lines.extend(f'#include "{header}"' for header in includes)
+    for index, expr in enumerate(exprs, start=1):
+        lines.append(f"const long long __e{index} = ({expr});")
+    path = directory / "probe.c"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _parse_asm(asm_text: str, count: int) -> list[int]:
+    """Return the signed 64-bit values for ``__e1``..``__eN`` in order from the assembly text."""
+    values: dict[int, int] = {}
+    lines = asm_text.splitlines()
+    for index, line in enumerate(lines):
+        label = _LABEL_RE.search(line)
+        if not label:
+            continue
+        number = int(label.group(1)[3:])  # strip the leading "__e"
+        # The .bits for this label is the next non-empty line (the compiler emits them adjacently).
+        for later in lines[index + 1: index + 4]:
+            bits = _BITS_RE.search(later)
+            if bits:
+                values[number] = _hex_to_signed64(bits.group(1))
+                break
+    if len(values) != count:
+        raise CompileError("TI assembly named %d constants, expected %d" % (len(values), count))
+    return [values[index] for index in sorted(values)]
+
+
+def evaluate(compiler: str, args: str, exprs: list[str], includes: list[str], workdir: Path) -> list[int]:
+    """Evaluate each expression in ``exprs`` with a TI-legacy compiler; return the values as ints.
+
+    ``args`` is the build's compile-command flag string. ``includes`` are spliced into the probe as
+    ``#include \"H\"`` lines. Raises ``CompileError`` on a compiler error or when the assembly lacks a
+    constant for a requested expression -- never returns a partial list."""
+    with tempfile.TemporaryDirectory(prefix="c_eval_ti_") as tmp:
+        work = Path(tmp)
+        asm_dir = work / "asm"
+        obj_dir = work / "obj"
+        asm_dir.mkdir(exist_ok=True)
+        obj_dir.mkdir(exist_ok=True)
+        probe = _write_probe_cexpr(work, exprs, includes)
+        cmd = [compiler]
+        if args:
+            cmd += _shlex_split(args)
+        cmd += [
+            "-k",
+            f"--asm_directory={asm_dir}",
+            f"--obj_directory={obj_dir}",
+            "-c",
+            str(probe),
+        ]
+        proc = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=300)
+        asm_files = sorted(asm_dir.glob("*.asm"))
+        if not asm_files:
+            # No .asm means the compile failed (or -k produced nothing); surface the compiler text.
+            raise CompileError(proc.stderr or "TI legacy produced no .asm")
+        asm_text = asm_files[0].read_text(encoding="utf-8", errors="replace")
+        if proc.returncode != 0:
+            raise CompileError(proc.stderr or "TI legacy constant evaluation error")
+        values = _parse_asm(asm_text, len(exprs))
+        return values
+
+
+def evaluate_one(compiler: str, args: str, expr: str, includes: list[str], workdir: Path) -> int:
+    """Evaluate a single ``expr`` with a TI-legacy compiler; return its value as an int.
+
+    Raises ``CompileError`` when the expression is not a constant expression (undeclared identifier,
+    non-constant, ...) so the front end can report exactly which expression failed."""
+    return evaluate(compiler, args, [expr], includes, workdir)[0]

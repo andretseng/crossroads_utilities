@@ -174,3 +174,65 @@ def record_layout(compiler: str, args: str, type_name: str, includes: list[str],
             raise CompileError("clang layout for %r has no [sizeof=...]" % type_name)
         members = _collect_members(rows, header_indent, header_indent + 2, 0)
         return {"unit": "byte", "size": size, "members": members}
+
+
+# --------------------------------------------------------------------------- #
+# c_eval back end -- evaluate constant expressions
+# --------------------------------------------------------------------------- #
+
+# clang emits, for each ``const long long __eN = (EXPR);``, a module-level constant like
+# ``@__e1 = hidden constant i64 1, align 8`` (or ``... i64 -5, ...``). Match the name and the value.
+_CONST_RE = re.compile(r"@(__e\d+)\s*=\s*[^,]*\s+i64\s+(-?\d+)")
+
+
+def _write_probe_cexpr(directory: Path, exprs: list[str], includes: list[str]) -> Path:
+    """Write the probe .c: stdint, the requested includes, then one ``__eN`` per expression."""
+    lines = ["#include <stdint.h>"]
+    lines.extend(f'#include "{header}"' for header in includes)
+    for index, expr in enumerate(exprs, start=1):
+        lines.append(f"const long long __e{index} = ({expr});")
+    path = directory / "probe.c"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _parse_llvm(llvm_ir: str) -> list[int]:
+    """Return the i64 constant values for ``__e1``, ``__e2``, ... in index order."""
+    found: dict[int, int] = {}
+    for match in _CONST_RE.finditer(llvm_ir):
+        number = int(match.group(1)[3:])  # strip the leading "__e"
+        found[number] = int(match.group(2))
+    return [found[index] for index in sorted(found)]
+
+
+def evaluate(compiler: str, args: str, exprs: list[str], includes: list[str], workdir: Path) -> list[int]:
+    """Evaluate each expression in ``exprs`` with a clang-family compiler; return the values as ints.
+
+    ``args`` is the build's compile-command flag string (defines, includes, target flags). ``includes``
+    are extra ``#include \"H\"`` headers to add to the probe. Raises ``CompileError`` on a compiler error
+    or when any expression fails to evaluate -- never returns a partial list."""
+    with tempfile.TemporaryDirectory(prefix="c_eval_clang_") as tmp:
+        work = Path(tmp)
+        probe = _write_probe_cexpr(work, exprs, includes)
+        cmd = [compiler]
+        if args:
+            cmd += _shlex_split(args)
+        cmd += ["-S", "-emit-llvm", "-o", "-", str(probe)]
+        proc = subprocess.run(cmd, cwd=str(workdir), capture_output=True, text=True, timeout=300)
+        if proc.returncode != 0 and not proc.stdout:
+            raise CompileError(proc.stderr)
+        # A bad expression (undeclared identifier, non-constant, ...) fails to compile.
+        if re.search(r"\berror:\s", proc.stderr or "") or "unknown type name" in (proc.stderr or ""):
+            raise CompileError(proc.stderr or "clang constant evaluation error")
+        values = _parse_llvm(proc.stdout)
+        if len(values) != len(exprs):
+            raise CompileError("clang emitted %d constants, expected %d" % (len(values), len(exprs)))
+        return values
+
+
+def evaluate_one(compiler: str, args: str, expr: str, includes: list[str], workdir: Path) -> int:
+    """Evaluate a single ``expr`` with a clang-family compiler; return its value as an int.
+
+    Raises ``CompileError`` when the expression is not a constant expression (undeclared identifier,
+    non-constant, ...) so the front end can report exactly which expression failed."""
+    return evaluate(compiler, args, [expr], includes, workdir)[0]
