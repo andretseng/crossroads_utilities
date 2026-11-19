@@ -61,3 +61,22 @@ link_facts.py PROJECT_DIR --build NAME overlaps         # overlapping sections /
 3. Overlaps only between components that are placed in memory: a component counts when its logical group (logical_group_list) is
    referenced by a placement_map `allocated_space/logical_group_ref`. Debug sections (.debug_*) are not placed and must never appear.
    For a text map without XML, use the SECTION ALLOCATION MAP and skip sections the map marks as not allocated (COPY/DSECT/debug).
+
+## Part 2 (2026-11-19): linker command file — `rules` and `whatif-cmd` (implementer: Pi; tests by Claude: test_link_cmd.py)
+Design note §4.6c-2 (D9). Do NOT write a full .cmd parser: let the linker do the work.
+Verified by Claude: in escape32_boot Release_TIMER, a copy of `../linker/boot_ticlang.cmd` with FLASH_BOOT LENGTH 0x800, relinked
+from the build folder with the build's own link recipe and the existing .o files, outputs in /tmp: 0.16 s, linker says
+`error #10099-D: program will not fit into available memory ... section ".text" size 0x886 ... FLASH_BOOT size: 0x800 unused: 0x490`.
+The link recipe is the `-o "<name>.out" $(ORDERED_OBJS)` rule in `<BUILD>/makefile`; ORDERED_OBJS lists the .o, the .cmd and `-Wl,-l` libs.
+
+- `rules` (JSON `{"cmd_files": [path], "memory": [{"name", "origin", "length", "file", "line"}], "symbols": [{"name", "value", "file", "line"}],
+  "sections": [{"name", "load": str|null, "run": str|null, "file", "line"}]}`): the .cmd file(s) named in ORDERED_OBJS. Expand `#if`/
+  `#define` with the build's linker --define first (C preprocessor semantics; the linker's own rule), then read MEMORY, top-level
+  `name = value;` assignments and SECTIONS entries (`> REGION` means load and run = REGION; `load = A, run = B`; `> 0xADDR` keeps the
+  address text). Values as int where they are numbers. Works also for a build that was never built (label `"basis": "rules only"`);
+  for a built build `"basis": "rules"` and each section adds `"placed_run"`/`"placed_load"` from the linkInfo (result).
+- `whatif-cmd --replace OLD NEW [--replace OLD NEW ...]`: OLD must occur exactly once in the .cmd (else exit 2 with the count). Copy the
+  .cmd to a fresh /tmp folder, apply, relink with the build recipe (cwd = build folder, .o as they are, -o/-m/--xml_link_info into /tmp),
+  never touch the project. JSON `{"linked": bool, "exit_code": int, "errors": [verbatim linker error lines],
+  "diff": {"regions": [{"name", "field", "old", "new"}], "symbols": [{"name", "old", "new"}]}}` (diff only when linked).
+  Exit 3 + ASK USER when the build is stale/not built/foreign or any listed .o is missing (relink needs real objects).
