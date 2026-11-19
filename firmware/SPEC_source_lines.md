@@ -45,3 +45,7 @@ render_answer, finalize_answer, logic_check, case_chain, translation_check, seen
 - Code in /tmp first, then ask to copy into ~/utilities/firmware/. No commit.
 - Report: `~/utilities/firmware/REPORT_source_lines_20261119.md` — grammar table (rule, source caller/Fix, test), replay numbers,
   every difference with its explanation, and a phase-2 plan: which caller switches to which function, in what order.
+
+## Addendum (2026-11-19): assembly files
+The grammar and show/verify must also cover assembly sources: `.asm`, `.S`, `.s`, `.cla`, `.inc` (TI asm comments start with `;`,
+labels in column 1). Add one test each for a `.asm` and a `.cla` cite.
