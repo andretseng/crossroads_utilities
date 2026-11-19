@@ -11,4 +11,4 @@ Design note §4.6e (D10). Behaviour must NOT change: every existing struct_layou
 - `struct_layout.py` keeps its CLI and JSON exactly; it picks the back end with platforms.for_compiler and contains no
   compiler-specific parsing (no "-fdump-record-layouts", no "DW_AT_" strings).
 Tests: test_backends.py (given, do not edit) + all 9 existing struct_layout/project_facts test files.
-Work in /tmp/backends_pi/ (copies are there). Report /tmp/backends_pi/REPORT.md. Same stop rule.
+Work in /tmp/backends_pi/ (copies are there). Report /tmp/backends_pi/report.md. Same stop rule.

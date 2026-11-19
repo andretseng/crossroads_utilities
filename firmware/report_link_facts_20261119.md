@@ -107,8 +107,8 @@ All 7 pass. The 3 `Real*` tests ran (both projects present), so the smoke tests 
 ## Files
 
 - `/tmp/link_facts_pi/link_facts.py` — implementation.
-- `/tmp/link_facts_pi/REPORT.md` — this file.
-- (Spec asked for `~/utilities/firmware/REPORT_link_facts_20261119.md` too, but `~/utilities` is
+- `/tmp/link_facts_pi/report.md` — this file.
+- (Spec asked for `~/utilities/firmware/report_link_facts_20261119.md` too, but `~/utilities` is
   read-only for me; the report lives here instead.)
 
 ## Open points / notes

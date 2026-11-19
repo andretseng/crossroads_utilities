@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only equivalence replay for SPEC_source_lines.md."""
+"""Read-only equivalence replay for spec_source_lines.md."""
 from collections import Counter
 import importlib
 import importlib.util
@@ -163,7 +163,7 @@ def inputs(skip_sessions):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Read-only equivalence replay for SPEC_source_lines.md.")
+    parser = argparse.ArgumentParser(description="Read-only equivalence replay for spec_source_lines.md.")
     parser.add_argument("--no-sessions", action="store_true",
                         help="skip session.jsonl files (tool output); replay ledgers and answers only")
     args = parser.parse_args()

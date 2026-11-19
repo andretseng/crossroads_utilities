@@ -32,7 +32,7 @@ Ran 23 tests ... OK
 ## Files changed (all in `/tmp/link_cmd_pi/`)
 - **`link_facts.py`** — added the `.cmd` parser, `rules`, and `whatif-cmd`. No existing behaviour
   changed; the summary/symbol/section/overlaps path is byte-for-byte the same.
-- **`REPORT.md`** — this report.
+- **`report.md`** — this report.
 
 ## How it works
 ### `.cmd` parsing (`parse_cmd_file`)

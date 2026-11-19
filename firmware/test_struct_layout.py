@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Acceptance tests for struct_layout.py (written by Claude before implementation; do not edit to make them pass).
-Expected values were measured by Claude on 2026-11-19 with the real compilers (see SPEC_struct_layout.md)."""
+Expected values were measured by Claude on 2026-11-19 with the real compilers (see spec_struct_layout.md)."""
 import json
 import subprocess
 import sys

@@ -50,5 +50,5 @@ syscfg_run.py PROJECT_DIR --build NAME whatif 'mcan1.desiredNomRate = 500' ['ins
 ## Rules
 - Standard library only; Python 3.10 and 3.13. No chip or case names in the script (tests may use them).
 - Read-only on projects, ~/ti, ~/.agents, vault. Write code in /tmp first, then ask to copy into ~/utilities/firmware/.
-- No git commit. Report: `~/utilities/firmware/REPORT_syscfg_run_20261119.md` — what was verified on which projects
+- No git commit. Report: `~/utilities/firmware/report_syscfg_run_20261119.md` — what was verified on which projects
   (at least AM13, MSPM0, C2000 F28P65x or F28003x, AM261 multi-core if SysConfig runs there), error format found, open points.

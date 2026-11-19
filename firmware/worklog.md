@@ -2,7 +2,7 @@
 Roles: Claude = architecture, acceptance tests, verification. Pi (Ornith, pane "Pi - llm-wiki") = implementation in /tmp.
 Acceptance: accept.sh (tests unchanged + pass + no skips + no case names) AND Claude spot checks on real projects not in the tests.
 Item 7 = flow proposals written to the vault note only; no edits to ~/.agents.
-Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPORT.md.
+Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/report.md.
 
 ## Plan
 1. struct_layout + compile_command merge; then split into front + backends/clang.py + backends/ti_legacy.py (D10)

@@ -37,7 +37,7 @@ link_facts.py PROJECT_DIR --build NAME overlaps         # overlapping sections /
 
 ## Rules
 - Standard library only; no chip/case names in the script. Read-only everywhere except /tmp. Code in /tmp first, then ask to copy.
-- No commit. Report `~/utilities/firmware/REPORT_link_facts_20261119.md`: projects checked (AM13, C2000, MSPM0, AM261, AM275x sbl
+- No commit. Report `~/utilities/firmware/report_link_facts_20261119.md`: projects checked (AM13, C2000, MSPM0, AM261, AM275x sbl
   if built), what was right/wrong, open points. Disassembly of `.out` is a later step — not in this task.
 
 ## Addendum (2026-11-19): implementer = Pi (Ornith); the acceptance tests are written by Claude

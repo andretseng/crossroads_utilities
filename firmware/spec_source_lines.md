@@ -43,7 +43,7 @@ render_answer, finalize_answer, logic_check, case_chain, translation_check, seen
 ## Rules
 - Standard library only; no case or chip names in the module. Read-only on ~/.agents, ~/exploring_lab, projects, vault.
 - Code in /tmp first, then ask to copy into ~/utilities/firmware/. No commit.
-- Report: `~/utilities/firmware/REPORT_source_lines_20261119.md` — grammar table (rule, source caller/Fix, test), replay numbers,
+- Report: `~/utilities/firmware/report_source_lines_20261119.md` — grammar table (rule, source caller/Fix, test), replay numbers,
   every difference with its explanation, and a phase-2 plan: which caller switches to which function, in what order.
 
 ## Addendum (2026-11-19): assembly files

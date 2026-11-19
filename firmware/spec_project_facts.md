@@ -30,7 +30,7 @@ Second path (no project, only text, e.g. AM275x HyperRAM customer input): `sdk_i
    One test must fail if the Debug 1.28.0 vs @versions 1.28.1 disagreement stopped being reported.
    Plus one smoke test on escape32_boot, skipped when the folder is missing.
    Also `sdk_inventory --match`: "SDK 12.01" + "AM275x" -> unique freertos_sdk_am275x_12_01_00_28 (fake tree in the test); no version -> "ask for it".
-4. Report: `~/utilities/firmware/REPORT_codex_20261119.md` — one row per project: builds, built?, compiler, SDK, SysConfig, DISAGREE/MISSING lines,
+4. Report: `~/utilities/firmware/report_codex_20261119.md` — one row per project: builds, built?, compiler, SDK, SysConfig, DISAGREE/MISSING lines,
    right/wrong, what you changed and why. List anything you could not decide.
 
 ## Rules

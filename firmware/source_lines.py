@@ -2,7 +2,7 @@
 """Display, parse, resolve, verify, and fill source-line citations.
 
 The citation grammar consolidates the exploring/crafting callers named by
-SPEC_source_lines.md.  In particular:
+spec_source_lines.md.  In particular:
 
 * a leading-dot filename and extensions longer than six characters are files
   (Fix 5: ``.cproject:428``; ledger_add and make_note);

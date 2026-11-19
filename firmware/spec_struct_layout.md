@@ -38,5 +38,5 @@ struct_layout.py --compiler PATH --flags "FLAGS" --type T --include header.h [..
 `test_struct_layout.py` (given, do not edit). Must pass: `python3 -m unittest -v test_struct_layout`.
 
 ## Rules
-Standard library only; no chip/case names in the script. Work only in /tmp/struct_layout_pi/. Report in /tmp/struct_layout_pi/REPORT.md.
+Standard library only; no chip/case names in the script. Work only in /tmp/struct_layout_pi/. Report in /tmp/struct_layout_pi/report.md.
 Stop after 2 failed fix attempts on the same test and write why.

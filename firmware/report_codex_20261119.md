@@ -1,7 +1,7 @@
 # Codex validation report — project_facts.py and sdk_inventory.py
 
 Date: 2026-11-19  
-Scope: tasks 1–11 in `SPEC_project_facts.md`, including Addenda A and B  
+Scope: tasks 1–11 in `spec_project_facts.md`, including Addenda A and B  
 Runtime used: Python 3.10.12 on crossroads
 
 ## Outcome

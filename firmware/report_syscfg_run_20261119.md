@@ -2,7 +2,7 @@
 
 Date: 2026-11-19  
 Runtime: Python 3.10.12 on crossroads  
-Scope: `SPEC_syscfg_run.md`
+Scope: `spec_syscfg_run.md`
 
 ## Outcome
 
