@@ -3,7 +3,8 @@
 
 Expected ranges and AST facts were measured independently with the AM261 build's own tiarmclang
 (`-fsyntax-only -Xclang -ast-dump=json -Xclang -ast-dump-filter=focLoop`). This project is absent
-from test_c_facts.py. The compiler reports the statement-content ranges asserted below.
+from test_c_facts.py. Ranges are the compiler AST statement-node ranges, including compound braces,
+consistent with test_c_facts.py expecting the line-170 else range to begin on its brace at line 173.
 """
 import json
 import subprocess
@@ -39,12 +40,12 @@ class UnseenAm261(unittest.TestCase):
 
     def test_statement_ranges_match_compiler_ast(self):
         ifs = {item["line"]: item for item in self.facts["ifs"]}
-        self.assertEqual(ifs[259]["then"], [260, 261])
-        self.assertEqual(ifs[263]["then"], [264, 269])
-        self.assertEqual(ifs[270]["then"], [271, 275])
-        self.assertEqual(ifs[276]["then"], [277, 282])
-        self.assertEqual(ifs[336]["then"], [337, 343])
-        self.assertEqual(ifs[337]["else"], [341, 342])
+        self.assertEqual(ifs[259]["then"], [259, 262])
+        self.assertEqual(ifs[263]["then"], [263, 270])
+        self.assertEqual(ifs[270]["then"], [270, 276])
+        self.assertEqual(ifs[276]["then"], [276, 283])
+        self.assertEqual(ifs[336]["then"], [336, 344])
+        self.assertEqual(ifs[337]["else"], [340, 343])
         for item in self.facts["ifs"]:
             self.assertLessEqual(item["then"][0], item["then"][1], item)
             if item["else"] is not None:
