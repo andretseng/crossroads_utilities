@@ -48,5 +48,23 @@ class ClangDriverRelink(unittest.TestCase):
         self.assertEqual(snapshot(MSPM0), before)
 
 
+AM261 = W / "motor/servo_drive_am261x-lp_r5fss0-0"
+
+
+class GeneratedCmdIsPassedToTheRelink(unittest.TestCase):
+    @unittest.skipUnless((AM261 / "Debug/syscfg/linker.cmd").is_file(), "AM261 missing")
+    def test_am261_relink_uses_the_copied_cmd(self):
+        # Claude's spot check: the AM261 relink printed `warning #10247-D: creating output section ".text" without a SECTIONS
+        # specification` = the linker never saw the (copied) syscfg/linker.cmd.
+        p = run(AM261, "--build", "Debug", "whatif-cmd", "--replace",
+                "R5F_TCMB   : ORIGIN = 0x80000 , LENGTH = 0x20000", "R5F_TCMB   : ORIGIN = 0x80000 , LENGTH = 0x30000")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        d = json.loads(p.stdout)
+        self.assertFalse([e for e in d["errors"] if "#10247" in e], d["errors"])
+        self.assertTrue(d["linked"], d["errors"])
+        changes = {(r["name"], r["field"]): (r["old"], r["new"]) for r in d["diff"]["regions"]}
+        self.assertEqual(changes[("R5F_TCMB", "length")], (0x20000, 0x30000))
+
+
 if __name__ == "__main__":
     unittest.main()
