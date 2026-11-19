@@ -22,3 +22,4 @@ Resume: read this file, then the vault note §8b, then the newest /tmp/*_pi/REPO
 - Order now: link_cmd (Pi, running) -> preprocess -> c_eval -> c_facts (AST) -> config_calls -> asm_view -> T3/T7 -> note tools.
 - 14:02 c_facts spec+tests ready (io.c sendbuf/recvbuf: else-if parent, ?: values 0x10/0x08, assignment paths, !n++).
 - 14:02 item 7 done: flow proposals P1-P10 in vault note §8c (not implemented). Vault note committed (not pushed).
+- 14:03 config_calls spec+tests ready (io.c 159/162/180 values, 151 path, config.c:21 call).
