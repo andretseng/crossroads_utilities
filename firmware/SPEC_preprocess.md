@@ -21,3 +21,4 @@ CLI: `preprocess.py PROJECT --build B FILE [--lines A-B]` | `preprocess.py --sdk
 `{"level": "build"|"sdk_make"|"partial", "file": abs path, "command": [...] or null, "unknown_symbols": [...],
   "lines": [{"line": int, "compiled": true|false|null, "expanded": str|null}]}` for the requested range (default whole file).
 Tests: test_preprocess.py (given, do not edit). Standard library + unifdef only. Work in /tmp/preprocess_pi/. Same stop rule.
+Uses platforms.py from the D10 split (copied in when the split is accepted).

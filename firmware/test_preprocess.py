@@ -81,12 +81,14 @@ class Partial(unittest.TestCase):
 @unittest.skipUnless((DAB / "RELEASE/subdir_rules.mk").is_file(), "dab_F28003x missing")
 class TiLegacy(unittest.TestCase):
     def test_cl2000_build_level_runs(self):
-        code, out, err = run(DAB, "--build", "RELEASE", "dab_main.c", "--lines", "1-400")
+        # dab_main.c:158 "#if DAB_SFRA_TYPE == DAB_SFRA_DISABLED" ... #else (161) DAB_setupSFRA(); (162): Claude's cl2000
+        # --preproc_with_line run shows line 162 compiled, so the #else branch is active in RELEASE.
+        code, out, err = run(DAB, "--build", "RELEASE", "dab_main.c", "--lines", "158-163")
         self.assertEqual(code, 0, err)
         data, rows = lines(out)
         self.assertEqual(data["level"], "build")
-        self.assertTrue(any(r["compiled"] for r in rows.values()))
-        self.assertTrue(any(r["compiled"] is False for r in rows.values()) or True)   # file may have no inactive branch
+        self.assertTrue(rows[162]["compiled"])
+        self.assertEqual(rows[162]["expanded"], "DAB_setupSFRA();")
 
 
 if __name__ == "__main__":
