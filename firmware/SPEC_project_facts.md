@@ -41,7 +41,10 @@ Second path (no project, only text, e.g. AM275x HyperRAM customer input): `sdk_i
 
 ## Addendum A (Claude, 2026-11-19, after task start) — still only project info + SDK inventory
 5. Staleness: per built build, compare the mtime of `<BUILD>/**/subdir_rules.mk` (or `<BUILD>/makefile`) with `.cproject` and each `.syscfg`.
-   If the build is older, print `- STALE: <BUILD> was built <date>, .cproject changed <date>: rebuild before trusting these facts`.
+   If the build is older, print `- STALE: <BUILD> was built <date>, .cproject changed <date>` and
+   `- ASK USER: rebuild <BUILD> in CCS, then run project_facts again`. Same ASK USER line for a build that was never built.
+   Exit code 3 when any build asked for with --build (or, without --build, every build) is stale or not built, so the caller stops
+   and asks the user instead of going on with old facts. 0 otherwise.
    Real case: escape32_boot Debug/subdir_rules.mk 2026-11-16 11:48 < .cproject 2026-11-17 14:43. Test it with a fixture (os.utime).
 6. Linked libraries: from `<BUILD>/makefile` linker recipe (`-Wl,-l...`, `-l...`, `-Wl,-i"<dir>"` / `--search_path`, `.cmd` linker script)
    list the libraries and where each resolves (project-local or SDK path); if a `.map` exists, the archives it names win (they were really linked).
@@ -50,3 +53,15 @@ Second path (no project, only text, e.g. AM275x HyperRAM customer input): `sdk_i
    SDK / compiler / SysConfig / device the text does NOT state, as "ask the customer: ...". Claims stay claims.
 8. Related projects: when sibling folders share a system project or a `*_system` / multi-core naming (AM261 system, AM275x cores),
    list them under "related projects" with their core / device id from each `.cproject`. Facts only, no guessing which one to flash.
+
+## Addendum B (user + Claude, 2026-11-19) — OS-aware paths
+9. Know the host OS (`platform.system()`: Linux / Darwin / Windows) and classify every tool/SDK path in a recipe:
+   - native: absolute path of this OS family (`/...` on Linux/Darwin, `C:/` or `C:\` on Windows);
+   - foreign: path of another OS (`C:/ti/...`, `.exe`, `.bat` on Linux/Darwin; `/home/...` on Windows).
+   A build whose recipes are foreign was generated on another machine: print `- FOREIGN: <BUILD> was generated on <Windows|Linux|macOS>
+   (<one example path>)` and `- ASK USER: rebuild <BUILD> on this machine`; exit 3 like stale.
+10. Version identity does not depend on the OS: take the version from the path name either way (e.g. `C:/ti/ti_cgt_arm_llvm_4.0.4.LTS` -> armllvm 4.0.4).
+   Then name the LOCAL equivalent from sdk_inventory (same kind, same version) if one exists:
+   `- local equivalent: compiler armllvm 4.0.4 -> /home/andre/ti/ti_cgt_arm_llvm_4.0.4.LTS` (or `none installed`).
+   Same for SysConfig and SDK. Do not rewrite the recipe; only report. This also serves dreammaker (macOS) reading Linux-made builds.
+11. Tests: a Windows-path recipe fixture on a Linux host -> FOREIGN + local equivalent; host OS injected in the test, not read from the machine.

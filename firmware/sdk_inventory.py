@@ -17,7 +17,7 @@ import re
 import sys
 
 DEFAULT_ROOT = Path.home() / "ti"
-VERSION = re.compile(r"\d+(?:[._]\d+){1,}")
+VERSION = re.compile(r"(?<![A-Za-z0-9])\d+(?:[._]\d+){1,}")
 SKIP = {"node_modules", ".git", "docs", "examples", "source", "tools", "packages", "dist", "utilities", "kernel"}
 TOOL_FOLDER = re.compile(r"^(ti[-_]cgt[-_]|sysconfig_|ccs\d|CCSTargetConfigurations$|TICloudAgent$|uniflash)", re.I)
 
@@ -46,9 +46,10 @@ def find_products(root, depth=5):
     found, stack = [], [(root, 0)]
     while stack:
         folder, level = stack.pop()
-        product = folder / ".metadata" / "product.json"
-        if product.is_file():
-            found.append(product)
+        for name in ("product.json", "sdk.json"):
+            product = folder / ".metadata" / name
+            if product.is_file():
+                found.append(product)
         if level >= depth:
             continue
         try:
@@ -76,7 +77,12 @@ def sdks(roots):
     """Every install folder under a root (version from the folder name), with the product.json found in it."""
     rows = []
     for root in roots:
-        for install in sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith(".") and not TOOL_FOLDER.match(path.name)):
+        try:
+            installs = sorted(path for path in root.iterdir()
+                              if path.is_dir() and not path.name.startswith(".") and not TOOL_FOLDER.match(path.name))
+        except OSError:
+            continue
+        for install in installs:
             products = find_products(install)
             if not any(product.parent.parent == install for product in products):
                 rows.append({"kind": "sdk", "name": install.name, "version": None,
@@ -119,6 +125,13 @@ def item_versions(item):
 def match_claims(text, data):
     """For each version claim in text: the installed items whose version starts with it."""
     words = {word.lower() for word in re.findall(r"[A-Za-z][A-Za-z0-9]*\d[A-Za-z0-9]*", text)}
+    device_words = list(dict.fromkeys(re.findall(r"\b(?=[A-Za-z0-9-]*[A-Za-z])(?=[A-Za-z0-9-]*\d)[A-Za-z][A-Za-z0-9-]*\b", text)))
+    stated = {
+        "SDK": bool(re.search(r"\bsdk\b", text, re.I)),
+        "compiler": bool(re.search(r"\b(?:compiler|clang|gcc|cgt|cl\d+|armcl|c29clang|tiarmclang)\b", text, re.I)),
+        "SysConfig": bool(re.search(r"\bsysconfig\b", text, re.I)),
+        "device": bool(device_words),
+    }
     results = []
     for claim_text in dict.fromkeys(match.group(0) for match in VERSION.finditer(text)):
         claim = version_tuple(claim_text)
@@ -129,7 +142,8 @@ def match_claims(text, data):
         verdict = "none" if not hits else "unique" if len(hits) == 1 else "several"
         results.append({"claim": claim_text, "verdict": verdict, "candidates": hits,
                         "narrowed_by": sorted(word for word in words if any(word in item["path"].lower() for item in narrowed))})
-    return results
+    return {"versions": results, "device_words": device_words,
+            "ask_customer": [name for name, present in stated.items() if not present]}
 
 
 def render(data, matches):
@@ -142,9 +156,11 @@ def render(data, matches):
     out += [f"- {item['version']} | {item['path']}" for item in data["sysconfig"]] or ["- none"]
     if matches is not None:
         out += ["", "## Version claims in the text (a claim, not a fact)"]
-        if not matches:
+        if not matches["versions"]:
             out.append("- the text states no version: ask for it")
-        for result in matches:
+        out.append("- device / part-number words: " + (", ".join(matches["device_words"]) or "none"))
+        out.append("- ask the customer: " + (", ".join(matches["ask_customer"]) or "nothing missing"))
+        for result in matches["versions"]:
             narrowed = f" (narrowed by: {', '.join(result['narrowed_by'])})" if result["narrowed_by"] else ""
             out.append(f"- \"{result['claim']}\": {result['verdict']}{narrowed}")
             out += [f"  - {item['kind']} {item['name']} {item.get('folder_version') or item['version']} | {item['path']}"
